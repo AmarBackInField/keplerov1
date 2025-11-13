@@ -13,6 +13,7 @@ from livekit import api, rtc
 from utils.logger import log_info, log_error, log_warning, log_exception
 from voice_backend.outboundService.services.call_service import make_outbound_call
 from voice_backend.outboundService.common.utils import validate_phone_number, format_phone_number
+from voice_backend.outboundService.common.update_config import update_config_async
 from model import OutboundCallRequest, StatusResponse
 
 load_dotenv()
@@ -24,14 +25,17 @@ TRANSCRIPT_FOLDER = Path("transcripts")
 TRANSCRIPT_FILE = TRANSCRIPT_FOLDER / "transcript.json"
 
 
-def update_env_file(
+async def update_dynamic_config(
     dynamic_instruction: str = None,
     caller_name: str = None,
     language: str = "en",
     emotion: str = "Calm"
 ):
     """
-    Update the .env file with dynamic agent instructions, caller name, language, and emotion.
+    Update the dynamic configuration (config.json) with agent parameters.
+    
+    This replaces the old .env file update approach. The config.json file
+    is read by the agent service on each new call/room connection.
     
     Args:
         dynamic_instruction: Custom instructions for the AI agent
@@ -39,16 +43,7 @@ def update_env_file(
         language: TTS language (e.g., "en", "es", "fr")
         emotion: TTS emotion (e.g., "Calm", "Excited", "Serious")
     """
-    env_path = Path(".env")
-    
-    # Read existing .env content
-    if env_path.exists():
-        with open(env_path, 'r', encoding='utf-8') as f:
-            lines = f.readlines()
-    else:
-        lines = []
-    
-    # Build the new instruction
+    # Build the full instruction
     if dynamic_instruction:
         if caller_name:
             full_instruction = f"{dynamic_instruction} The caller's name is {caller_name}, address them by name."
@@ -60,55 +55,20 @@ def update_env_file(
         else:
             full_instruction = "You are a helpful voice AI assistant."
     
-    # Check if environment variables exist and update them
-    agent_instructions_found = False
-    caller_name_found = False
-    language_found = False
-    emotion_found = False
+    # Update config.json using the async function
+    await update_config_async(
+        caller_name=caller_name or "Guest",
+        agent_instructions=full_instruction,
+        tts_language=language,
+        tts_emotion=emotion
+    )
     
-    for i, line in enumerate(lines):
-        if line.strip().startswith('AGENT_INSTRUCTIONS='):
-            lines[i] = f'AGENT_INSTRUCTIONS="{full_instruction}"\n'
-            agent_instructions_found = True
-        elif line.strip().startswith('CALLER_NAME='):
-            lines[i] = f'CALLER_NAME="{caller_name or ""}"\n'
-            caller_name_found = True
-        elif line.strip().startswith('TTS_LANGUAGE='):
-            lines[i] = f'TTS_LANGUAGE="{language}"\n'
-            language_found = True
-        elif line.strip().startswith('TTS_EMOTION='):
-            lines[i] = f'TTS_EMOTION="{emotion}"\n'
-            emotion_found = True
-    
-    # If not found, append to the file
-    if not agent_instructions_found:
-        lines.append(f'AGENT_INSTRUCTIONS="{full_instruction}"\n')
-    
-    if not caller_name_found and caller_name:
-        lines.append(f'CALLER_NAME="{caller_name}"\n')
-    
-    if not language_found:
-        lines.append(f'TTS_LANGUAGE="{language}"\n')
-    
-    if not emotion_found:
-        lines.append(f'TTS_EMOTION="{emotion}"\n')
-    
-    # Write back to .env
-    with open(env_path, 'w', encoding='utf-8') as f:
-        f.writelines(lines)
-    
-    # Update the current process environment
-    os.environ['AGENT_INSTRUCTIONS'] = full_instruction
+    log_info(f"Updated config.json with dynamic parameters:")
+    log_info(f"  - Agent Instructions: {full_instruction[:100]}...")
     if caller_name:
-        os.environ['CALLER_NAME'] = caller_name
-    os.environ['TTS_LANGUAGE'] = language
-    os.environ['TTS_EMOTION'] = emotion
-    
-    log_info(f"Updated AGENT_INSTRUCTIONS: {full_instruction[:100]}...")
-    if caller_name:
-        log_info(f"Updated CALLER_NAME: {caller_name}")
-    log_info(f"Updated TTS_LANGUAGE: {language}")
-    log_info(f"Updated TTS_EMOTION: {emotion}")
+        log_info(f"  - Caller Name: {caller_name}")
+    log_info(f"  - TTS Language: {language}")
+    log_info(f"  - TTS Emotion: {emotion}")
 
 
 async def wait_for_transcript(timeout: int = 300, check_interval: int = 10) -> Optional[dict]:
@@ -200,15 +160,15 @@ async def outbound_call(request: OutboundCallRequest):
                 detail="Invalid phone number format. Phone number must start with '+' followed by country code and number (e.g., +1234567890)"
             )
         
-        # Update .env file with dynamic parameters
-        log_info("Updating .env file with dynamic parameters...")
-        update_env_file(
+        # Update config.json with dynamic parameters
+        log_info("Updating config.json with dynamic parameters...")
+        await update_dynamic_config(
             dynamic_instruction=request.dynamic_instruction,
             caller_name=request.name,
             language=request.language,
             emotion=request.emotion
         )
-        log_info("✓ .env file updated successfully")
+        log_info("✓ config.json updated successfully")
         
         log_info(f"Initiating call to formatted number: '{formatted_number}'")
         
@@ -326,16 +286,16 @@ async def outbound_call_with_escalation(request: OutboundCallRequest):
         if not supervisor_phone:
             log_warning("LIVEKIT_SUPERVISOR_PHONE_NUMBER not set - escalation will fail if requested")
         
-        # Update .env file with dynamic parameters for the agent
-        # The outbound.py agent worker will read these values
-        log_info("Updating .env file with dynamic parameters for agent...")
-        update_env_file(
+        # Update config.json with dynamic parameters for the agent
+        # The agent worker will read these values from config.json
+        log_info("Updating config.json with dynamic parameters for agent...")
+        await update_dynamic_config(
             dynamic_instruction=request.dynamic_instruction,
             caller_name=request.name,
             language=request.language,
             emotion=request.emotion
         )
-        log_info("✓ .env file updated successfully")
+        log_info("✓ config.json updated successfully")
         
         # Create unique room name for this call
         # Pattern matches what outbound.py expects
