@@ -7,21 +7,25 @@ from voice_backend.outboundService.common.config.settings import (
     PARTICIPANT_NAME, CALL_TIMEOUT
 )
 
-async def make_outbound_call(phone_number: str):
+async def make_outbound_call(phone_number: str, sip_trunk_id: str = None):
     """
     Make an outbound call to the specified phone number
     Agent instructions are read from .env AGENT_INSTRUCTIONS variable
     
     Args:
         phone_number: The phone number to call
+        sip_trunk_id: SIP trunk ID (uses env variable if not provided)
     """
     print("Initiating outbound call...")
     print("Connecting to LiveKit API...")
     
+    # Use provided sip_trunk_id or fall back to env variable
+    trunk_id = sip_trunk_id if sip_trunk_id else SIP_TRUNK_ID
+    
     livekit_api = api.LiveKitAPI()
     
     request = CreateSIPParticipantRequest(
-        sip_trunk_id=SIP_TRUNK_ID,
+        sip_trunk_id=trunk_id,
         sip_call_to=phone_number,
         room_name=ROOM_NAME,
         participant_identity=PARTICIPANT_IDENTITY,

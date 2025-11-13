@@ -69,6 +69,9 @@ class OutboundCallRequest(BaseModel):
     dynamic_instruction: Optional[str] = None
     language: Optional[str] = "en"  # TTS language (e.g., "en", "es", "fr")
     voice_id: Optional[str] = "21m00Tcm4TlvDq8ikWAM"  # ElevenLabs voice ID (default: Rachel)
+    sip_trunk_id: Optional[str] = None  # SIP trunk ID (uses env variable if not provided)
+    transfer_to: Optional[str] = None  # Phone number to transfer to (e.g., +1234567890)
+    escalation_condition: Optional[str] = None  # Condition when to escalate/transfer the call
 
 
 # ============================================================================
@@ -156,6 +159,9 @@ class BulkCommunicationRequest(BaseModel):
     dynamic_instruction: Optional[str] = None
     language: Optional[str] = "en"
     voice_id: Optional[str] = "21m00Tcm4TlvDq8ikWAM"  # ElevenLabs voice ID
+    sip_trunk_id: Optional[str] = None  # SIP trunk ID (uses env variable if not provided)
+    transfer_to: Optional[str] = None  # Phone number to transfer to (e.g., +1234567890)
+    escalation_condition: Optional[str] = None  # Condition when to escalate/transfer the call
 
 
 class ContactResult(BaseModel):

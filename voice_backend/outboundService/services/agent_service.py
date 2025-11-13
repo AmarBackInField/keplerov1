@@ -111,13 +111,23 @@ class Assistant(Agent):
 
     @function_tool
     async def transfer_to_human(self, ctx: RunContext) -> str:
-        """Transfer active SIP caller to a human number."""
+        """Transfer active SIP caller to a human number. if it satisfies the escalation condition, transfer to the human number."""
         job_ctx = get_job_context()
         if job_ctx is None:
             logger.error("Job context not found")
             return "error"
-
-        transfer_to = "tel:+919911062767"
+        
+        # Load transfer_to from dynamic config
+        dynamic_config = load_dynamic_config()
+        transfer_to_number = dynamic_config.get("transfer_to", "+919911062767")
+        
+        # Ensure the transfer_to number has the "tel:" prefix for SIP
+        if not transfer_to_number.startswith("tel:"):
+            transfer_to = f"tel:{transfer_to_number}"
+        else:
+            transfer_to = transfer_to_number
+        
+        logger.info(f"Transfer requested to: {transfer_to}")
 
         sip_participant = None
         for participant in job_ctx.room.remote_participants.values():
@@ -180,16 +190,26 @@ async def entrypoint(ctx: agents.JobContext):
         dynamic_instruction = dynamic_config.get("agent_instructions", "You are a helpful voice AI assistant.")
         language = dynamic_config.get("tts_language", "en")
         voice_id = dynamic_config.get("voice_id", "21m00Tcm4TlvDq8ikWAM")
+        escalation_condition = dynamic_config.get("escalation_condition")
+
+        # Build full instructions with escalation condition if provided
+        if escalation_condition:
+            instructions = f"{dynamic_instruction} Below is the escalation condition: {escalation_condition}"
+        else:
+            instructions = dynamic_instruction
         
         logger.info("✓ Dynamic configuration loaded successfully")
         logger.info(f"  - Caller Name: {caller_name}")
         logger.info(f"  - TTS Language: {language}")
         logger.info(f"  - Voice ID: {voice_id}")
         logger.info(f"  - Agent Instructions: {dynamic_instruction[:100]}...")
+        if escalation_condition:
+            logger.info(f"  - Escalation Condition: {escalation_condition}")
+        logger.info(f"  - Full Instructions: {instructions[:300]}...")
     except Exception as e:
         logger.warning(f"Failed to load dynamic config, using defaults: {str(e)}")
         caller_name = "Guest"
-        dynamic_instruction = "You are a helpful voice AI assistant."
+        instructions = "You are a helpful voice AI assistant."
         language = "en"
         voice_id = "21m00Tcm4TlvDq8ikWAM"
     
@@ -267,7 +287,7 @@ async def entrypoint(ctx: agents.JobContext):
     # --------------------------------------------------------
     # Initialize assistant and start session
     # --------------------------------------------------------
-    assistant = Assistant(instructions=dynamic_instruction)
+    assistant = Assistant(instructions=instructions)
     room_options = RoomInputOptions(noise_cancellation=noise_cancellation.BVC())
 
     try:

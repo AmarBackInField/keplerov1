@@ -24,7 +24,8 @@ router = APIRouter(prefix="/bulk-communication", tags=["Bulk Communication"])
 
 
 async def make_call_request(phone: str, name: str, dynamic_instruction: Optional[str], 
-                            language: str, voice_id: str) -> dict:
+                            language: str, voice_id: str, sip_trunk_id: Optional[str] = None,
+                            transfer_to: Optional[str] = None, escalation_condition: Optional[str] = None) -> dict:
     """
     Make a call using the outbound call service.
     
@@ -40,7 +41,10 @@ async def make_call_request(phone: str, name: str, dynamic_instruction: Optional
             name=name,
             dynamic_instruction=dynamic_instruction,
             language=language,
-            voice_id=voice_id
+            voice_id=voice_id,
+            sip_trunk_id=sip_trunk_id,
+            transfer_to=transfer_to,
+            escalation_condition=escalation_condition
         )
         
         # Call the endpoint function directly
@@ -169,7 +173,10 @@ async def process_contact(contact, request: BulkCommunicationRequest) -> Contact
                 name=contact.name,
                 dynamic_instruction=request.dynamic_instruction,
                 language=request.language,
-                voice_id=request.voice_id
+                voice_id=request.voice_id,
+                sip_trunk_id=request.sip_trunk_id,
+                transfer_to=request.transfer_to,
+                escalation_condition=request.escalation_condition
             )
             call_status = call_result["status"]
             transcript = call_result.get("transcript")
@@ -251,6 +258,9 @@ async def bulk_communication(request: BulkCommunicationRequest):
             - dynamic_instruction: Custom instructions for AI agent (for calls)
             - language: TTS language (for calls, default: "en")
             - voice_id: ElevenLabs voice ID (for calls, default: Rachel)
+            - sip_trunk_id: SIP trunk ID (for calls, optional)
+            - transfer_to: Phone number to transfer to (for calls, optional)
+            - escalation_condition: Condition when to escalate/transfer (for calls, optional)
         
     Returns:
         BulkCommunicationResponse with detailed results for each contact including:

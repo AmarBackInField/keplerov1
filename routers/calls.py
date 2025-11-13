@@ -29,7 +29,9 @@ async def update_dynamic_config(
     dynamic_instruction: str = None,
     caller_name: str = None,
     language: str = "en",
-    voice_id: str = "21m00Tcm4TlvDq8ikWAM"
+    voice_id: str = "21m00Tcm4TlvDq8ikWAM",
+    transfer_to: str = None,
+    escalation_condition: str = None
 ):
     """
     Update the dynamic configuration (config.json) with agent parameters.
@@ -42,6 +44,8 @@ async def update_dynamic_config(
         caller_name: Name of the person being called
         language: TTS language (e.g., "en", "es", "fr")
         voice_id: ElevenLabs voice ID (default: Rachel)
+        transfer_to: Phone number to transfer to (e.g., +1234567890)
+        escalation_condition: Condition when to escalate/transfer the call
     """
     # Build the full instruction
     if dynamic_instruction:
@@ -55,12 +59,20 @@ async def update_dynamic_config(
         else:
             full_instruction = "You are a helpful voice AI assistant."
     
+    # Build additional parameters for config
+    additional_params = {}
+    if transfer_to:
+        additional_params["transfer_to"] = transfer_to
+    if escalation_condition:
+        additional_params["escalation_condition"] = escalation_condition
+    
     # Update config.json using the async function
     await update_config_async(
         caller_name=caller_name or "Guest",
         agent_instructions=full_instruction,
         tts_language=language,
-        voice_id=voice_id
+        voice_id=voice_id,
+        additional_params=additional_params if additional_params else None
     )
     
     log_info(f"Updated config.json with dynamic parameters:")
@@ -69,6 +81,10 @@ async def update_dynamic_config(
         log_info(f"  - Caller Name: {caller_name}")
     log_info(f"  - TTS Language: {language}")
     log_info(f"  - Voice ID: {voice_id}")
+    if transfer_to:
+        log_info(f"  - Transfer To: {transfer_to}")
+    if escalation_condition:
+        log_info(f"  - Escalation Condition: {escalation_condition}")
 
 
 async def wait_for_transcript(timeout: int = 300, check_interval: int = 10) -> Optional[dict]:
@@ -143,6 +159,9 @@ async def outbound_call(request: OutboundCallRequest):
             - dynamic_instruction: Custom instructions for the AI agent (optional)
             - language: TTS language code (default: "en")
             - voice_id: ElevenLabs voice ID (default: Rachel)
+            - sip_trunk_id: SIP trunk ID (optional, uses env variable if not provided)
+            - transfer_to: Phone number to transfer to (optional)
+            - escalation_condition: Condition when to escalate/transfer (optional)
         
     Returns:
         StatusResponse with call status and transcript (if available)
@@ -166,7 +185,9 @@ async def outbound_call(request: OutboundCallRequest):
             dynamic_instruction=request.dynamic_instruction,
             caller_name=request.name,
             language=request.language,
-            voice_id=request.voice_id
+            voice_id=request.voice_id,
+            transfer_to=request.transfer_to,
+            escalation_condition=request.escalation_condition
         )
         log_info("✓ config.json updated successfully")
         
@@ -181,7 +202,10 @@ async def outbound_call(request: OutboundCallRequest):
                 log_warning(f"Could not clear existing transcript: {str(e)}")
         
         # Make the outbound call
-        await make_outbound_call(phone_number=formatted_number)
+        await make_outbound_call(
+            phone_number=formatted_number,
+            sip_trunk_id=request.sip_trunk_id
+        )
         
         log_info(f"Successfully initiated call to '{formatted_number}' for {request.name or 'caller'}")
         
@@ -204,6 +228,9 @@ async def outbound_call(request: OutboundCallRequest):
                 "has_dynamic_instruction": bool(request.dynamic_instruction),
                 "language": request.language,
                 "voice_id": request.voice_id,
+                "sip_trunk_id": request.sip_trunk_id,
+                "transfer_to": request.transfer_to,
+                "escalation_condition": request.escalation_condition,
                 "transcript_received": transcript is not None
             },
             transcript=transcript
@@ -244,6 +271,9 @@ async def outbound_call_with_escalation(request: OutboundCallRequest):
             - dynamic_instruction: Custom instructions for the AI agent (optional)
             - language: TTS language code (default: "en")
             - voice_id: ElevenLabs voice ID (default: Rachel)
+            - sip_trunk_id: SIP trunk ID (optional, uses env variable if not provided)
+            - transfer_to: Phone number to transfer to (optional)
+            - escalation_condition: Condition when to escalate/transfer (optional)
         
     Returns:
         StatusResponse with call initiation status
@@ -293,7 +323,9 @@ async def outbound_call_with_escalation(request: OutboundCallRequest):
             dynamic_instruction=request.dynamic_instruction,
             caller_name=request.name,
             language=request.language,
-            voice_id=request.voice_id
+            voice_id=request.voice_id,
+            transfer_to=request.transfer_to,
+            escalation_condition=request.escalation_condition
         )
         log_info("✓ config.json updated successfully")
         
@@ -369,6 +401,9 @@ async def outbound_call_with_escalation(request: OutboundCallRequest):
                     "has_dynamic_instruction": bool(request.dynamic_instruction),
                     "language": request.language,
                     "voice_id": request.voice_id,
+                    "sip_trunk_id": request.sip_trunk_id,
+                    "transfer_to": request.transfer_to,
+                    "escalation_condition": request.escalation_condition,
                     "escalation_enabled": bool(supervisor_phone),
                     "supervisor_phone": supervisor_phone if supervisor_phone else "Not configured",
                     "flow": "Room created → Customer joins → Agent auto-dispatches → Conversation starts → Escalation available"
