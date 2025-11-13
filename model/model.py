@@ -68,7 +68,7 @@ class OutboundCallRequest(BaseModel):
     name: Optional[str] = None
     dynamic_instruction: Optional[str] = None
     language: Optional[str] = "en"  # TTS language (e.g., "en", "es", "fr")
-    emotion: Optional[str] = "Calm"  # TTS emotion (e.g., "Calm", "Excited", "Serious")
+    voice_id: Optional[str] = "21m00Tcm4TlvDq8ikWAM"  # ElevenLabs voice ID (default: Rachel)
 
 
 # ============================================================================
@@ -155,7 +155,7 @@ class BulkCommunicationRequest(BaseModel):
     # Call-related parameters
     dynamic_instruction: Optional[str] = None
     language: Optional[str] = "en"
-    emotion: Optional[str] = "Calm"
+    voice_id: Optional[str] = "21m00Tcm4TlvDq8ikWAM"  # ElevenLabs voice ID
 
 
 class ContactResult(BaseModel):

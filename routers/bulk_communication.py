@@ -24,7 +24,7 @@ router = APIRouter(prefix="/bulk-communication", tags=["Bulk Communication"])
 
 
 async def make_call_request(phone: str, name: str, dynamic_instruction: Optional[str], 
-                            language: str, emotion: str) -> dict:
+                            language: str, voice_id: str) -> dict:
     """
     Make a call using the outbound call service.
     
@@ -40,7 +40,7 @@ async def make_call_request(phone: str, name: str, dynamic_instruction: Optional
             name=name,
             dynamic_instruction=dynamic_instruction,
             language=language,
-            emotion=emotion
+            voice_id=voice_id
         )
         
         # Call the endpoint function directly
@@ -169,7 +169,7 @@ async def process_contact(contact, request: BulkCommunicationRequest) -> Contact
                 name=contact.name,
                 dynamic_instruction=request.dynamic_instruction,
                 language=request.language,
-                emotion=request.emotion
+                voice_id=request.voice_id
             )
             call_status = call_result["status"]
             transcript = call_result.get("transcript")
@@ -250,7 +250,7 @@ async def bulk_communication(request: BulkCommunicationRequest):
             - email_body: Email subject and body (required if "email" in communication_types)
             - dynamic_instruction: Custom instructions for AI agent (for calls)
             - language: TTS language (for calls, default: "en")
-            - emotion: TTS emotion (for calls, default: "Calm")
+            - voice_id: ElevenLabs voice ID (for calls, default: Rachel)
         
     Returns:
         BulkCommunicationResponse with detailed results for each contact including:

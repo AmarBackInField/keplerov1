@@ -29,7 +29,7 @@ def update_config(
     caller_name: Optional[str] = None,
     agent_instructions: Optional[str] = None,
     tts_language: str = "en",
-    tts_emotion: str = "Calm",
+    voice_id: str = "21m00Tcm4TlvDq8ikWAM",
     additional_params: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """
@@ -42,7 +42,7 @@ def update_config(
         caller_name: Name of the person being called (optional)
         agent_instructions: Custom instructions for the AI agent (optional)
         tts_language: TTS language code (e.g., "en", "es", "fr", "de")
-        tts_emotion: TTS emotion setting (e.g., "Calm", "Excited", "Serious")
+        voice_id: ElevenLabs voice ID (default: "21m00Tcm4TlvDq8ikWAM" - Rachel)
         additional_params: Any additional parameters to store in config (optional)
     
     Returns:
@@ -58,7 +58,7 @@ def update_config(
             "caller_name": caller_name or "Guest",
             "agent_instructions": agent_instructions or "You are a helpful voice AI assistant.",
             "tts_language": tts_language,
-            "tts_emotion": tts_emotion,
+            "voice_id": voice_id,
             "last_updated": asyncio.get_event_loop().time() if asyncio._get_running_loop() else 0
         }
         
@@ -79,7 +79,7 @@ def update_config(
         logger.info(f"  - Caller Name: {config_data['caller_name']}")
         logger.info(f"  - Agent Instructions: {config_data['agent_instructions'][:100]}...")
         logger.info(f"  - TTS Language: {config_data['tts_language']}")
-        logger.info(f"  - TTS Emotion: {config_data['tts_emotion']}")
+        logger.info(f"  - Voice ID: {config_data['voice_id']}")
         
         return config_data
         
@@ -95,7 +95,7 @@ async def update_config_async(
     caller_name: Optional[str] = None,
     agent_instructions: Optional[str] = None,
     tts_language: str = "en",
-    tts_emotion: str = "Calm",
+    voice_id: str = "21m00Tcm4TlvDq8ikWAM",
     additional_params: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """
@@ -108,7 +108,7 @@ async def update_config_async(
         caller_name: Name of the person being called (optional)
         agent_instructions: Custom instructions for the AI agent (optional)
         tts_language: TTS language code (e.g., "en", "es", "fr", "de")
-        tts_emotion: TTS emotion setting (e.g., "Calm", "Excited", "Serious")
+        voice_id: ElevenLabs voice ID (default: "21m00Tcm4TlvDq8ikWAM" - Rachel)
         additional_params: Any additional parameters to store in config (optional)
     
     Returns:
@@ -125,7 +125,7 @@ async def update_config_async(
         caller_name,
         agent_instructions,
         tts_language,
-        tts_emotion,
+        voice_id,
         additional_params
     )
 
@@ -159,7 +159,7 @@ def load_dynamic_config() -> Dict[str, Any]:
         logger.info(f"✓ Configuration loaded successfully from {CONFIG_FILE}")
         logger.info(f"  - Caller Name: {config_data.get('caller_name', 'Not set')}")
         logger.info(f"  - TTS Language: {config_data.get('tts_language', 'Not set')}")
-        logger.info(f"  - TTS Emotion: {config_data.get('tts_emotion', 'Not set')}")
+        logger.info(f"  - Voice ID: {config_data.get('voice_id', 'Not set')}")
         
         return config_data
         

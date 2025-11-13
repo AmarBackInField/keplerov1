@@ -29,7 +29,7 @@ async def update_dynamic_config(
     dynamic_instruction: str = None,
     caller_name: str = None,
     language: str = "en",
-    emotion: str = "Calm"
+    voice_id: str = "21m00Tcm4TlvDq8ikWAM"
 ):
     """
     Update the dynamic configuration (config.json) with agent parameters.
@@ -41,7 +41,7 @@ async def update_dynamic_config(
         dynamic_instruction: Custom instructions for the AI agent
         caller_name: Name of the person being called
         language: TTS language (e.g., "en", "es", "fr")
-        emotion: TTS emotion (e.g., "Calm", "Excited", "Serious")
+        voice_id: ElevenLabs voice ID (default: Rachel)
     """
     # Build the full instruction
     if dynamic_instruction:
@@ -60,7 +60,7 @@ async def update_dynamic_config(
         caller_name=caller_name or "Guest",
         agent_instructions=full_instruction,
         tts_language=language,
-        tts_emotion=emotion
+        voice_id=voice_id
     )
     
     log_info(f"Updated config.json with dynamic parameters:")
@@ -68,7 +68,7 @@ async def update_dynamic_config(
     if caller_name:
         log_info(f"  - Caller Name: {caller_name}")
     log_info(f"  - TTS Language: {language}")
-    log_info(f"  - TTS Emotion: {emotion}")
+    log_info(f"  - Voice ID: {voice_id}")
 
 
 async def wait_for_transcript(timeout: int = 300, check_interval: int = 10) -> Optional[dict]:
@@ -142,7 +142,7 @@ async def outbound_call(request: OutboundCallRequest):
             - name: Caller's name for personalization (optional)
             - dynamic_instruction: Custom instructions for the AI agent (optional)
             - language: TTS language code (default: "en")
-            - emotion: TTS emotion (default: "Calm")
+            - voice_id: ElevenLabs voice ID (default: Rachel)
         
     Returns:
         StatusResponse with call status and transcript (if available)
@@ -166,7 +166,7 @@ async def outbound_call(request: OutboundCallRequest):
             dynamic_instruction=request.dynamic_instruction,
             caller_name=request.name,
             language=request.language,
-            emotion=request.emotion
+            voice_id=request.voice_id
         )
         log_info("✓ config.json updated successfully")
         
@@ -203,7 +203,7 @@ async def outbound_call(request: OutboundCallRequest):
                 "name": request.name,
                 "has_dynamic_instruction": bool(request.dynamic_instruction),
                 "language": request.language,
-                "emotion": request.emotion,
+                "voice_id": request.voice_id,
                 "transcript_received": transcript is not None
             },
             transcript=transcript
@@ -243,7 +243,7 @@ async def outbound_call_with_escalation(request: OutboundCallRequest):
             - name: Customer's name for personalization (optional)
             - dynamic_instruction: Custom instructions for the AI agent (optional)
             - language: TTS language code (default: "en")
-            - emotion: TTS emotion (default: "Calm")
+            - voice_id: ElevenLabs voice ID (default: Rachel)
         
     Returns:
         StatusResponse with call initiation status
@@ -293,7 +293,7 @@ async def outbound_call_with_escalation(request: OutboundCallRequest):
             dynamic_instruction=request.dynamic_instruction,
             caller_name=request.name,
             language=request.language,
-            emotion=request.emotion
+            voice_id=request.voice_id
         )
         log_info("✓ config.json updated successfully")
         
@@ -368,7 +368,7 @@ async def outbound_call_with_escalation(request: OutboundCallRequest):
                     "sip_call_id": participant.sip_call_id,
                     "has_dynamic_instruction": bool(request.dynamic_instruction),
                     "language": request.language,
-                    "emotion": request.emotion,
+                    "voice_id": request.voice_id,
                     "escalation_enabled": bool(supervisor_phone),
                     "supervisor_phone": supervisor_phone if supervisor_phone else "Not configured",
                     "flow": "Room created → Customer joins → Agent auto-dispatches → Conversation starts → Escalation available"

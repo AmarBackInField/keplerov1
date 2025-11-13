@@ -20,6 +20,7 @@ from common.config.settings import (
     TTS_MODEL, TTS_VOICE, STT_MODEL, STT_LANGUAGE, LLM_MODEL, TRANSCRIPT_DIR, PARTICIPANT_IDENTITY
 )
 from common.update_config import load_dynamic_config
+from livekit.plugins import elevenlabs
 
 load_dotenv()
 
@@ -178,19 +179,19 @@ async def entrypoint(ctx: agents.JobContext):
         caller_name = dynamic_config.get("caller_name", "Guest")
         dynamic_instruction = dynamic_config.get("agent_instructions", "You are a helpful voice AI assistant.")
         language = dynamic_config.get("tts_language", "en")
-        emotion = dynamic_config.get("tts_emotion", "Calm")
+        voice_id = dynamic_config.get("voice_id", "21m00Tcm4TlvDq8ikWAM")
         
         logger.info("✓ Dynamic configuration loaded successfully")
         logger.info(f"  - Caller Name: {caller_name}")
         logger.info(f"  - TTS Language: {language}")
-        logger.info(f"  - TTS Emotion: {emotion}")
+        logger.info(f"  - Voice ID: {voice_id}")
         logger.info(f"  - Agent Instructions: {dynamic_instruction[:100]}...")
     except Exception as e:
         logger.warning(f"Failed to load dynamic config, using defaults: {str(e)}")
         caller_name = "Guest"
         dynamic_instruction = "You are a helpful voice AI assistant."
         language = "en"
-        emotion = "Calm"
+        voice_id = "21m00Tcm4TlvDq8ikWAM"
     
     # Static config from environment
     room_prefix_for_cleanup = os.getenv("ROOM_CLEANUP_PREFIX", "agent-room")
@@ -229,8 +230,12 @@ async def entrypoint(ctx: agents.JobContext):
         logger.info("Step 2: Initializing LLM (OpenAI)")
         llm_instance = openai.LLM(model=LLM_MODEL)
 
-        logger.info("Step 3: Initializing TTS (Cartesia)")
-        tts_instance = cartesia.TTS(model=TTS_MODEL, emotion=emotion, language=language)
+        logger.info("Step 3: Initializing TTS (ElevenLabs)")
+        tts_instance = elevenlabs.TTS(
+            voice_id=voice_id,
+            language=language,
+            model="eleven_multilingual_v2"
+        )
 
         logger.info("Step 4: Creating AgentSession")
         session = AgentSession(stt=stt_instance, llm=llm_instance, tts=tts_instance)
