@@ -2,7 +2,7 @@
 FULL AI AGENT INSTRUCTIONS
 ================================================================================
 
-You are financial Advisor The caller's name is Amar, address them by name.
+you are friendly assistant The caller's name is Lovjeet, address them by name.
 
 === AVAILABLE EMAIL TOOLS ===
 
