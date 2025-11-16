@@ -172,32 +172,30 @@ async def cleanup_previous_rooms(api_key, api_secret, server_url, prefix="agent-
 
     try:
         logger.info("Attempting to list & cleanup previous rooms (prefix=%s)...", prefix)
-        # RoomService behavior may vary by SDK version. We try the typical async interface.
-        room_service = api.room_service.RoomService(api_key=api_key, api_secret=api_secret, host=server_url)
-        active_rooms = await room_service.list_rooms()
+        # Use LiveKitAPI for room management
+        lk_api = api.LiveKitAPI(url=server_url, api_key=api_key, api_secret=api_secret)
+        room_service = lk_api.room
+        
+        # List all rooms
+        active_rooms = await room_service.list_rooms(api.ListRoomsRequest())
+        
         # active_rooms may be an object with .rooms or be a list depending on SDK
         rooms_iterable = getattr(active_rooms, "rooms", active_rooms)
         deleted = 0
         for room in rooms_iterable:
             name = getattr(room, "name", None) or room
             if name and name.startswith(prefix):
-                logger.info("🧹 Deleting old room: %s", name)
+                logger.info("Room cleanup: Deleting old room: %s", name)
                 try:
-                    # Try typical call patterns for different SDK versions:
-                    if hasattr(room_service, "delete_room"):
-                        # Some SDKs accept a string, some require a request object
-                        try:
-                            await room_service.delete_room(name)
-                        except TypeError:
-                            # fallback to api.DeleteRoomRequest
-                            await room_service.delete_room(api.DeleteRoomRequest(room=name))
-                    else:
-                        # as a last resort, use the low-level admin API if available
-                        await api.RoomService(api_key=api_key, api_secret=api_secret, host=server_url).delete_room(name)
+                    # Delete the room using the request object
+                    await room_service.delete_room(api.DeleteRoomRequest(room=name))
                     deleted += 1
                 except Exception as e:
                     logger.warning("Failed to delete room %s: %s", name, e)
-        logger.info("🧹 Room cleanup finished — deleted %d rooms matching prefix '%s'", deleted, prefix)
+        
+        # Close the API connection
+        await lk_api.aclose()
+        logger.info("Room cleanup finished - deleted %d rooms matching prefix '%s'", deleted, prefix)
     except Exception as e:
         logger.warning("Room cleanup failed (non-fatal). Reason: %s", e, exc_info=True)
 
@@ -448,11 +446,15 @@ async def entrypoint(ctx: agents.JobContext):
     room_prefix_for_cleanup = os.getenv("ROOM_CLEANUP_PREFIX", "agent-room")
 
     # --------------------------------------------------------
-    # Prepare cleanup callback (save transcript)
+    # Prepare cleanup callback (save transcript and clean resources)
     # --------------------------------------------------------
     async def cleanup_and_save():
         try:
             logger.info("Cleanup started...")
+            
+            # Give websockets time to close gracefully before cleanup
+            await asyncio.sleep(1.0)
+            
             os.makedirs(TRANSCRIPT_DIR, exist_ok=True)
             filename = f"{TRANSCRIPT_DIR}/transcript.json"
 
@@ -463,6 +465,8 @@ async def entrypoint(ctx: agents.JobContext):
                 logger.info(f"Transcript saved to {filename}")
             else:
                 logger.warning("No session history to save (session not created or no history).")
+            
+            logger.info("Cleanup completed successfully")
         except Exception as e:
             logger.error(f"Error during cleanup: {e}", exc_info=True)
 
@@ -482,11 +486,22 @@ async def entrypoint(ctx: agents.JobContext):
         llm_instance = openai.LLM(model=LLM_MODEL)
 
         logger.info("Step 3: Initializing TTS (ElevenLabs)")
-        tts_instance = elevenlabs.TTS(
-            voice_id=voice_id,
-            language=language,
-            model="eleven_multilingual_v2"
-        )
+        try:
+            tts_instance = elevenlabs.TTS(
+                voice_id=voice_id,
+                language=language,
+                model="eleven_multilingual_v2"
+            )
+            logger.info("[OK] ElevenLabs TTS initialized successfully")
+        except Exception as tts_error:
+            logger.warning(f"ElevenLabs TTS initialization failed: {tts_error}")
+            logger.info("Falling back to OpenAI TTS...")
+            # Fallback to OpenAI TTS
+            tts_instance = openai.TTS(
+                voice="alloy",
+                model="tts-1"
+            )
+            logger.info("[OK] OpenAI TTS initialized as fallback")
 
         logger.info("Step 4: Creating AgentSession")
         session = AgentSession(stt=stt_instance, llm=llm_instance, tts=tts_instance)
@@ -500,6 +515,8 @@ async def entrypoint(ctx: agents.JobContext):
     # --------------------------------------------------------
     try:
         await cleanup_previous_rooms(LIVEKIT_API_KEY, LIVEKIT_API_SECRET, LIVEKIT_URL, prefix=room_prefix_for_cleanup)
+        # Small delay to ensure room cleanup completes on server side
+        await asyncio.sleep(0.5)
     except Exception as e:
         logger.warning("cleanup_previous_rooms raised an exception (non-fatal): %s", e, exc_info=True)
 
@@ -555,19 +572,26 @@ async def entrypoint(ctx: agents.JobContext):
         logger.error(f"[ERROR] Failed sending greeting: {e}", exc_info=True)
 
     # --------------------------------------------------------
-    # Wait for shutdown (updated API)
+    # Wait for shutdown
     # --------------------------------------------------------
     logger.info("Session running — waiting for termination signal...")
     try:
-        # newer livekit.agents versions use wait_for_termination()
-        if hasattr(ctx, "wait_for_termination"):
-            await ctx.wait_for_termination()
-        else:
-            # fallback to run_forever
-            await agents.run_forever()
+        # Wait for the job context to terminate (standard in livekit-agents 1.2+)
+        await ctx.wait_for_termination()
+        logger.info("Termination signal received")
+    except asyncio.CancelledError:
+        logger.info("Session cancelled - shutting down gracefully")
     except Exception as e:
         logger.error(f"[ERROR] Error while waiting for shutdown: {e}", exc_info=True)
     finally:
+        # Give time for all resources to clean up properly
+        logger.info("Initiating resource cleanup...")
+        try:
+            # Allow TTS websockets to close gracefully
+            await asyncio.sleep(0.5)
+        except Exception:
+            pass
+        
         logger.info("=" * 60)
         logger.info(f"ENTRYPOINT FINISHED - Room: {ctx.room.name}")
         logger.info("=" * 60)
