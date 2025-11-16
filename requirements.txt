@@ -8,6 +8,7 @@ python-dotenv
 # Data Processing
 pdfplumber
 openpyxl
+pandas
 
 # HTTP & Web Scraping
 requests
