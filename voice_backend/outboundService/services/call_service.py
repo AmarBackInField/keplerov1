@@ -16,12 +16,18 @@ async def make_outbound_call(phone_number: str, sip_trunk_id: str = None):
         phone_number: The phone number to call
         sip_trunk_id: SIP trunk ID (uses env variable if not provided)
     """
-    print("Initiating outbound call...")
-    print("Connecting to LiveKit API...")
+    print("=" * 60)
+    print("INITIATING OUTBOUND CALL")
+    print("=" * 60)
+    print(f"📱 Phone Number: {phone_number}")
+    print(f"🏠 Target Room: {ROOM_NAME}")
+    print(f"📡 SIP Trunk: {sip_trunk_id if sip_trunk_id else SIP_TRUNK_ID}")
+    print("=" * 60)
     
     # Use provided sip_trunk_id or fall back to env variable
     trunk_id = sip_trunk_id if sip_trunk_id else SIP_TRUNK_ID
     
+    print("Connecting to LiveKit API...")
     livekit_api = api.LiveKitAPI()
     
     request = CreateSIPParticipantRequest(

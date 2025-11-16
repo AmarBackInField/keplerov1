@@ -9,7 +9,7 @@ from pymongo import MongoClient
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
 from config.prompt import SYSTEM_PROMPT, RAG_PROMPT_TEMPLATE
-from utils.logger import log_info, log_error, log_debug
+from utils.logger import log_info, log_error, log_debug, log_warning
 
 
 class GraphState(TypedDict):
@@ -64,13 +64,20 @@ class RAGWorkflow:
         # Initialize MongoDB checkpointer if memory is enabled
         self.memory = None
         if self.memory_enabled:
-            client = MongoClient(mongodb_uri)
-            self.memory = MongoDBSaver(
-                client=client,
-                db_name="python",
-                checkpoint_collection_name="checkpoints"
-            )
-            log_info("MongoDB checkpointer initialized")
+            try:
+                client = MongoClient(mongodb_uri)
+                # Use a new checkpoint collection name to avoid compatibility issues
+                self.memory = MongoDBSaver(
+                    client=client,
+                    db_name="python",
+                    checkpoint_collection_name="checkpoints_v2"
+                )
+                log_info("MongoDB checkpointer initialized with new collection")
+            except Exception as e:
+                log_error(f"Failed to initialize MongoDB checkpointer: {str(e)}")
+                log_warning("Continuing without memory checkpointing")
+                self.memory_enabled = False
+                self.memory = None
         
         # Build the graph
         self.graph = self._build_graph()
@@ -263,7 +270,7 @@ class RAGWorkflow:
             try:
                 # Get the latest state from checkpointer for this thread
                 state_snapshot = self.graph.get_state(config)
-                if state_snapshot and state_snapshot.values:
+                if state_snapshot and hasattr(state_snapshot, 'values') and state_snapshot.values:
                     existing_history = state_snapshot.values.get("conversation_history", [])
                     if existing_history:
                         conversation_history = existing_history
@@ -285,7 +292,18 @@ class RAGWorkflow:
             }
             
             # Execute the workflow
-            result = self.graph.invoke(initial_state, config)
+            try:
+                result = self.graph.invoke(initial_state, config)
+            except ValueError as ve:
+                import traceback
+                log_error(f"ValueError during workflow execution: {str(ve)}")
+                log_error(f"Traceback:\n{traceback.format_exc()}")
+                raise
+            except TypeError as te:
+                import traceback
+                log_error(f"TypeError during workflow execution: {str(te)}")
+                log_error(f"Traceback:\n{traceback.format_exc()}")
+                raise
             
             log_info("RAG workflow completed successfully")
             
@@ -298,7 +316,9 @@ class RAGWorkflow:
             }
         
         except Exception as e:
+            import traceback
             log_error(f"Error running RAG workflow: {str(e)}")
+            log_error(f"Full traceback:\n{traceback.format_exc()}")
             return {
                 "answer": "An error occurred while processing your request.",
                 "retrieved_docs": [],
@@ -328,7 +348,7 @@ class RAGWorkflow:
             
             # Get the latest state from checkpointer
             state_snapshot = self.graph.get_state(config)
-            if state_snapshot and state_snapshot.values:
+            if state_snapshot and hasattr(state_snapshot, 'values') and state_snapshot.values:
                 history = state_snapshot.values.get("conversation_history", [])
                 log_info(f"Found {len(history)} conversation turns")
                 return history

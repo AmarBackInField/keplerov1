@@ -20,6 +20,7 @@ from livekit.plugins import (
     silero,
     google
 )
+# from voice_backend.outboundService.common.config.settings import ROOM_NAME
 from dotenv import load_dotenv
 from common.config.settings import (
     TTS_MODEL, TTS_VOICE, STT_MODEL, STT_LANGUAGE, LLM_MODEL, TRANSCRIPT_DIR, PARTICIPANT_IDENTITY
@@ -443,7 +444,7 @@ async def entrypoint(ctx: agents.JobContext):
         voice_id = "21m00Tcm4TlvDq8ikWAM"
     
     # Static config from environment
-    room_prefix_for_cleanup = os.getenv("ROOM_CLEANUP_PREFIX", "agent-room")
+    room_prefix_for_cleanup = os.getenv("ROOM_CLEANUP_PREFIX", "my-assistant-room")
 
     # --------------------------------------------------------
     # Prepare cleanup callback (save transcript and clean resources)
@@ -540,7 +541,7 @@ async def entrypoint(ctx: agents.JobContext):
 
     try:
         logger.info("Starting agent session...")
-        await session.start(room=ctx.room, agent=assistant, room_input_options=room_options)
+        await session.start(room="my-assistant-room", agent=assistant, room_input_options=room_options)
         logger.info("[OK] Agent session started successfully")
     except Exception as e:
         logger.error("Failed to start AgentSession: %s", e, exc_info=True)
@@ -605,8 +606,28 @@ def run_agent():
     logger.info("=" * 60)
     logger.info("RUN_AGENT CALLED - Starting LiveKit Agent CLI")
     logger.info("=" * 60)
+    
+    # Get agent name from environment or use default
+    agent_name = os.getenv("AGENT_NAME", "voice-assistant")
+    logger.info(f"Starting agent with name: {agent_name}")
+    logger.info(f"Agent will listen for new rooms and auto-dispatch")
+    logger.info(f"Agent will run CONTINUOUSLY - press Ctrl+C to stop")
+    logger.info("=" * 60)
+    
     try:
-        agents.cli.run_app(agents.WorkerOptions(entrypoint_fnc=entrypoint))
+        # Configure worker to auto-join ALL new rooms
+        worker_options = agents.WorkerOptions(
+            entrypoint_fnc=entrypoint,
+            agent_name=agent_name,
+            # Auto-dispatch to any room that gets created
+            request_fnc=None  # None means join all rooms
+        )
+        
+        logger.info("Worker configured to auto-join ALL new rooms")
+        agents.cli.run_app(worker_options)
+        logger.info("Agent CLI exited normally")
+    except KeyboardInterrupt:
+        logger.info("Agent stopped by user (Ctrl+C)")
     except Exception as e:
         logger.error(f"[ERROR] Fatal error in run_agent: {e}", exc_info=True)
         raise
