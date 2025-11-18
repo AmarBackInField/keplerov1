@@ -1,39 +1,83 @@
 import asyncio
 import time
+import uuid
 from livekit import api
 from livekit.protocol.sip import CreateSIPParticipantRequest
-from voice_backend.outboundService.common.config.settings import (
-    SIP_TRUNK_ID, ROOM_NAME, PARTICIPANT_IDENTITY, 
-    PARTICIPANT_NAME, CALL_TIMEOUT
-)
+import os
+import json
+# Configuration
+SIP_TRUNK_ID = "ST_vEtSehKXAp4d"
+PARTICIPANT_IDENTITY = "sip-caller"
+PARTICIPANT_NAME = "Phone Caller"
+CALL_TIMEOUT = 60
+from dotenv import load_dotenv
+load_dotenv()
+LIVEKIT_URL = os.getenv("LIVEKIT_URL")
+LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY")
+LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET")
+print("LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET:", LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
 
-async def make_outbound_call(phone_number: str, sip_trunk_id: str = None):
+async def make_outbound_call(
+    phone_number: str,
+    sip_trunk_id: str = SIP_TRUNK_ID,
+    room_name: str = None
+):
     """
-    Make an outbound call to the specified phone number
-    Agent instructions are read from .env AGENT_INSTRUCTIONS variable
+    Make an outbound call to the specified phone number.
+    Creates a unique room for each call.
     
     Args:
-        phone_number: The phone number to call
-        sip_trunk_id: SIP trunk ID (uses env variable if not provided)
+        phone_number: The phone number to call (e.g., "+1234567890")
+        sip_trunk_id: SIP trunk ID
+        room_name: Optional room name (generates unique one if not provided)
+    
+    Returns:
+        tuple: (participant_info, room_name) if successful
     """
+    # Generate unique room name if not provided
+    if not room_name:
+        timestamp = int(time.time())
+        unique_id = str(uuid.uuid4())[:8]
+        room_name = f"outbound-call-{timestamp}-{unique_id}"
+    
     print("=" * 60)
     print("INITIATING OUTBOUND CALL")
     print("=" * 60)
     print(f"📱 Phone Number: {phone_number}")
-    print(f"🏠 Target Room: {ROOM_NAME}")
-    print(f"📡 SIP Trunk: {sip_trunk_id if sip_trunk_id else SIP_TRUNK_ID}")
+    print(f"🏠 Room Name: {room_name}")
+    print(f"📡 SIP Trunk: {sip_trunk_id}")
     print("=" * 60)
+    print("LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET:", LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
     
-    # Use provided sip_trunk_id or fall back to env variable
-    trunk_id = sip_trunk_id if sip_trunk_id else SIP_TRUNK_ID
-    
+    # Connect to LiveKit API
     print("Connecting to LiveKit API...")
-    livekit_api = api.LiveKitAPI()
+    livekit_api = api.LiveKitAPI(api_key=LIVEKIT_API_KEY, api_secret=LIVEKIT_API_SECRET, url=LIVEKIT_URL)
     
+    # Create the room first (optional but recommended)
+    try:
+        print(f"Creating room: {room_name}")
+        await livekit_api.room.create_room(
+            api.CreateRoomRequest(
+                name=room_name,
+                empty_timeout=60,  # Room closes after 60 seconds if empty
+                max_participants=10,
+                metadata=json.dumps({"agent_name": "voice-assistant"})
+            )
+        )
+        print(f"✓ Room created: {room_name}")
+    except Exception as e:
+        print(f"Note: Room creation message: {e}")
+        # Room might already exist, continue anyway
+    
+    # Wait a moment for the agent to connect to the room
+    print("Waiting for agent to join room...")
+    await asyncio.sleep(3)
+    
+    # Create SIP participant request
     request = CreateSIPParticipantRequest(
-        sip_trunk_id=trunk_id,
+        sip_trunk_id=sip_trunk_id,
         sip_call_to=phone_number,
-        room_name=ROOM_NAME,
+        room_name=room_name,
         participant_identity=PARTICIPANT_IDENTITY,
         participant_name=PARTICIPANT_NAME,
         krisp_enabled=True,
@@ -42,39 +86,109 @@ async def make_outbound_call(phone_number: str, sip_trunk_id: str = None):
     
     try:
         print(f"📱 Calling {phone_number}...")
-        print(f"🏠 Room: {ROOM_NAME}")
         
         start_time = time.time()
         participant = await livekit_api.sip.create_sip_participant(request)
         connection_time = time.time() - start_time
         
-        print(f"✓ Connection established in {connection_time:.2f} seconds")
+        print(f"✓ Call connected in {connection_time:.2f} seconds")
         print(f"* Participant ID: {participant.participant_id}")
         print(f"* SIP Call ID: {participant.sip_call_id}")
         print(f"* Room: {participant.room_name}")
-        print("-" * 50)
-        print("✓ The AI assistant should now be speaking to the caller")
-        print("* Metrics are being logged in real-time")
+        print("-" * 60)
+        print("✓ Call is active - AI assistant should be speaking")
+        print("=" * 60)
+        
+        return participant, room_name
         
     except Exception as e:
         print(f"✗ Error creating SIP participant: {e}")
-        print("⚠ Make sure:")
-        print("   1. Your agent is running first")
-        print("   2. SIP trunk ID is correct")
-        print("   3. Phone number format is correct")
-        print("   4. LiveKit credentials are set")
+        print("⚠ Troubleshooting checklist:")
+        print("   1. Verify agent is running: python outbound_agent.py")
+        print("   2. Check SIP trunk ID is correct")
+        print("   3. Verify phone number format: +[country][number]")
+        print("   4. Confirm LiveKit credentials in .env")
+        print("   5. Check SIP trunk is properly configured")
         raise
     finally:
         await livekit_api.aclose()
 
-async def process_contacts_with_delay(contacts: list, delay_seconds: int):
+
+async def make_multiple_calls(
+    phone_numbers: list,
+    delay_seconds: int = 30,
+    sip_trunk_id: str = SIP_TRUNK_ID
+):
     """
-    Process multiple contacts with delay between calls
+    Make multiple outbound calls with delay between each.
     
     Args:
-        contacts: List of phone numbers
+        phone_numbers: List of phone numbers to call
         delay_seconds: Delay between calls in seconds
+        sip_trunk_id: SIP trunk ID
     """
-    for phone_number in contacts:
-        await make_outbound_call(phone_number)
-        await asyncio.sleep(delay_seconds) 
+    print(f"Starting campaign: {len(phone_numbers)} calls")
+    print(f"Delay between calls: {delay_seconds} seconds")
+    print("=" * 60)
+    
+    results = []
+    
+    for i, phone_number in enumerate(phone_numbers, 1):
+        print(f"\nCall {i}/{len(phone_numbers)}")
+        
+        try:
+            participant, room = await make_outbound_call(
+                phone_number=phone_number,
+                sip_trunk_id=sip_trunk_id
+            )
+            results.append({
+                "phone_number": phone_number,
+                "status": "success",
+                "room": room,
+                "participant_id": participant.participant_id
+            })
+        except Exception as e:
+            results.append({
+                "phone_number": phone_number,
+                "status": "failed",
+                "error": str(e)
+            })
+        
+        # Wait before next call (except after last call)
+        if i < len(phone_numbers):
+            print(f"Waiting {delay_seconds} seconds before next call...")
+            await asyncio.sleep(delay_seconds)
+    
+    # Print summary
+    print("\n" + "=" * 60)
+    print("CAMPAIGN SUMMARY")
+    print("=" * 60)
+    successful = sum(1 for r in results if r["status"] == "success")
+    failed = sum(1 for r in results if r["status"] == "failed")
+    print(f"Total calls: {len(results)}")
+    print(f"Successful: {successful}")
+    print(f"Failed: {failed}")
+    print("=" * 60)
+    
+    return results
+
+
+# Example usage
+if __name__ == "__main__":
+    # Single call example
+    async def single_call_example():
+        await make_outbound_call("+1234567890")
+    
+    # Multiple calls example
+    async def multiple_calls_example():
+        contacts = [
+            "+1234567890",
+            "+0987654321",
+        ]
+        await make_multiple_calls(contacts, delay_seconds=30)
+    
+    # Run single call
+    asyncio.run(single_call_example())
+    
+    # Or run multiple calls
+    # asyncio.run(multiple_calls_example())

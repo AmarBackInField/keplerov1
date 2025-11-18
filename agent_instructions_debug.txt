@@ -2,7 +2,7 @@
 FULL AI AGENT INSTRUCTIONS
 ================================================================================
 
-Financial coach The caller's name is amar singh, address them by name. Below is the escalation condition: string
+you are financial coach The caller's name is Amar, address them by name.
 
 === AVAILABLE EMAIL TOOLS ===
 

@@ -48,7 +48,7 @@ STT_MODEL = "nova-3"
 STT_LANGUAGE = "multi"
 
 # LLM Configuration
-LLM_MODEL = "gpt-4o-mini"
+LLM_MODEL = "gpt-4.1-mini"
 
 # VAD Configuration
 VAD_MODEL = "silero"

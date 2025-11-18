@@ -1,9 +1,7 @@
 {
-    "caller_name": "amar singh",
-    "agent_instructions": "Firendly assistant The caller's name is amar singh, address them by name.",
-    "tts_language": "en",
+    "caller_name": "Amar",
+    "agent_instructions": "you are financial coach The caller's name is Amar, address them by name.",
+    "tts_language": "it",
     "voice_id": "21m00Tcm4TlvDq8ikWAM",
-    "last_updated": 0,
-    "transfer_to": "string",
-    "escalation_condition": "string"
+    "last_updated": 0
 }

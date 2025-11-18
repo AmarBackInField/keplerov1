@@ -63,8 +63,8 @@ logger = logging.getLogger("services.agent_service")
 logger.info("=" * 60)
 logger.info("Agent Service Module Loading")
 logger.info(f"LIVEKIT_URL: {LIVEKIT_URL or 'NOT SET'}")
-logger.info(f"LIVEKIT_API_KEY: {'SET' if LIVEKIT_API_KEY else 'NOT SET'}")
-logger.info(f"LIVEKIT_API_SECRET: {'SET' if LIVEKIT_API_SECRET else 'NOT SET'}")
+logger.info(f"LIVEKIT_API_KEY: {LIVEKIT_API_KEY}")
+logger.info(f"LIVEKIT_API_SECRET: {LIVEKIT_API_SECRET}")
 logger.info(f"OPENAI_API_KEY: {'SET' if os.getenv('OPENAI_API_KEY') else 'NOT SET'}")
 logger.info(f"STT_MODEL: {STT_MODEL}")
 logger.info(f"LLM_MODEL: {LLM_MODEL}")
@@ -444,7 +444,7 @@ async def entrypoint(ctx: agents.JobContext):
         voice_id = "21m00Tcm4TlvDq8ikWAM"
     
     # Static config from environment
-    room_prefix_for_cleanup = os.getenv("ROOM_CLEANUP_PREFIX", "my-assistant-room")
+    # room_prefix_for_cleanup = os.getenv("ROOM_CLEANUP_PREFIX", "my-assistant-room")
 
     # --------------------------------------------------------
     # Prepare cleanup callback (save transcript and clean resources)
@@ -541,7 +541,8 @@ async def entrypoint(ctx: agents.JobContext):
 
     try:
         logger.info("Starting agent session...")
-        await session.start(room="my-assistant-room", agent=assistant, room_input_options=room_options)
+
+        await session.start(room=ctx.room, agent=assistant, room_input_options=room_options)
         logger.info("[OK] Agent session started successfully")
     except Exception as e:
         logger.error("Failed to start AgentSession: %s", e, exc_info=True)
@@ -557,10 +558,15 @@ async def entrypoint(ctx: agents.JobContext):
     # --------------------------------------------------------
     await asyncio.sleep(2)  # Let audio streams stabilize
 
-    greeting_instruction = (
-        f"Hello {caller_name}, I’m your cricket coach from Island AI. "
-        "How are you today? What would you like to practice?"
-    )
+    # Multi-language greeting support
+    greetings = {
+        "en": f"Hello {caller_name}, I'm your Assistant from Aistein.",
+        "it": f"Ciao {caller_name}, sono il tuo Assistente di Aistein.",
+        "es": f"Hola {caller_name}, soy tu Asistente de Aistein."
+    }
+    
+    # Default to English if language not supported
+    greeting_instruction = greetings.get(language, greetings["en"])
     try:
         # Guard that session is running (some SDKs expose is_running)
         is_running = getattr(session, "is_running", None)
@@ -578,7 +584,7 @@ async def entrypoint(ctx: agents.JobContext):
     logger.info("Session running — waiting for termination signal...")
     try:
         # Wait for the job context to terminate (standard in livekit-agents 1.2+)
-        await ctx.wait_for_termination()
+        # await ctx.wait_for_termination()
         logger.info("Termination signal received")
     except asyncio.CancelledError:
         logger.info("Session cancelled - shutting down gracefully")
@@ -608,19 +614,16 @@ def run_agent():
     logger.info("=" * 60)
     
     # Get agent name from environment or use default
-    agent_name = os.getenv("AGENT_NAME", "voice-assistant")
+    agent_name = "voice-assistant"
     logger.info(f"Starting agent with name: {agent_name}")
     logger.info(f"Agent will listen for new rooms and auto-dispatch")
     logger.info(f"Agent will run CONTINUOUSLY - press Ctrl+C to stop")
     logger.info("=" * 60)
-    
     try:
         # Configure worker to auto-join ALL new rooms
+        # When only entrypoint_fnc is provided, it auto-accepts all job requests
         worker_options = agents.WorkerOptions(
             entrypoint_fnc=entrypoint,
-            agent_name=agent_name,
-            # Auto-dispatch to any room that gets created
-            request_fnc=None  # None means join all rooms
         )
         
         logger.info("Worker configured to auto-join ALL new rooms")
