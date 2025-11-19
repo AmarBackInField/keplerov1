@@ -118,7 +118,12 @@ async def root():
                 "prefix": "/calls",
                 "endpoints": [
                     "POST /calls/outbound - Initiate an outbound call",
-                    "POST /calls/outbound-with-escalation - Initiate an outbound call with AI agent and supervisor escalation"
+                    "POST /calls/outbound-with-escalation - Initiate an outbound call with AI agent and supervisor escalation",
+                    "POST /calls/setup-sip-trunk - Create and configure Twilio and LiveKit SIP trunks",
+                    "POST /calls/create-livekit-trunk - Create LiveKit trunk from existing Twilio SIP address",
+                    "POST /calls/create-inbound-trunk - Create inbound SIP trunk for receiving calls",
+                    "POST /calls/create-dispatch-rule - Create dispatch rule to route incoming calls",
+                    "POST /calls/setup-inbound-sip - Complete inbound SIP setup (trunk + dispatch rule)"
                 ]
             },
             "LLM": {

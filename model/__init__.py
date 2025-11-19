@@ -42,6 +42,18 @@ from .model import (
     RegisterToolResponse,
     DeleteToolRequest,
     DeleteToolResponse,
+    
+    # SIP Trunk Setup models
+    CreateSIPTrunkRequest,
+    CreateSIPTrunkResponse,
+    CreateLiveKitTrunkRequest,
+    CreateLiveKitTrunkResponse,
+    CreateInboundTrunkRequest,
+    CreateInboundTrunkResponse,
+    CreateDispatchRuleRequest,
+    CreateDispatchRuleResponse,
+    SetupInboundSIPRequest,
+    SetupInboundSIPResponse,
 )
 
 __all__ = [
@@ -84,5 +96,17 @@ __all__ = [
     "RegisterToolResponse",
     "DeleteToolRequest",
     "DeleteToolResponse",
+    
+    # SIP Trunk Setup
+    "CreateSIPTrunkRequest",
+    "CreateSIPTrunkResponse",
+    "CreateLiveKitTrunkRequest",
+    "CreateLiveKitTrunkResponse",
+    "CreateInboundTrunkRequest",
+    "CreateInboundTrunkResponse",
+    "CreateDispatchRuleRequest",
+    "CreateDispatchRuleResponse",
+    "SetupInboundSIPRequest",
+    "SetupInboundSIPResponse",
 ]
 

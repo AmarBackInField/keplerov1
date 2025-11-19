@@ -7,6 +7,7 @@ from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.mongodb import MongoDBSaver
 from pymongo import MongoClient
 from langchain_openai import ChatOpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage, SystemMessage
 from config.prompt import SYSTEM_PROMPT, RAG_PROMPT_TEMPLATE
 from utils.logger import log_info, log_error, log_debug, log_warning
@@ -26,6 +27,8 @@ class GraphState(TypedDict):
         thread_id: Thread ID for conversation memory
         conversation_history: List of previous Q&A pairs
         system_prompt: Custom system prompt (optional)
+        provider: LLM provider ("openai" or "gemini")
+        api_key: API key for the provider
     """
     query: str
     collection_name: str
@@ -36,6 +39,8 @@ class GraphState(TypedDict):
     thread_id: Optional[str]
     conversation_history: List[dict]
     system_prompt: Optional[str]
+    provider: Optional[str]
+    api_key: Optional[str]
 
 
 class RAGWorkflow:
@@ -172,6 +177,35 @@ class RAGWorkflow:
         try:
             log_info("Generating answer based on retrieved context and conversation history")
             
+            # Select LLM based on provider and API key from state
+            provider = state.get("provider", "openai").lower()
+            api_key = state.get("api_key")
+            
+            # Create LLM instance based on provider
+            if provider == "gemini":
+                if api_key:
+                    llm = ChatGoogleGenerativeAI(
+                        model="gemini-2.5-pro",
+                        temperature=0.7,
+                        google_api_key=api_key
+                    )
+                    log_info("Using Gemini (with custom API key)")
+                else:
+                    log_error("Gemini provider selected but no API key provided")
+                    state["answer"] = "Error: Gemini provider requires an API key."
+                    return state
+            else:  # default to OpenAI
+                if api_key:
+                    llm = ChatOpenAI(
+                        model="gpt-4.1-mini",
+                        temperature=0.7,
+                        openai_api_key=api_key
+                    )
+                    log_info("Using OpenAI with custom API key")
+                else:
+                    llm = self.llm  # Use default configured LLM
+                    log_info("Using default OpenAI configuration")
+            
             # Build conversation history context
             history_context = ""
             if state.get("conversation_history"):
@@ -211,8 +245,8 @@ class RAGWorkflow:
                     state["answer"] = "I don't have enough information in the knowledge base to answer your question. Please try rephrasing or ask about a different topic."
                     return state
             
-            # Generate answer using LLM
-            response = self.llm.invoke(messages)
+            # Generate answer using LLM (dynamic based on provider)
+            response = llm.invoke(messages)
             state["answer"] = response.content
             
             # Update conversation history
@@ -240,7 +274,9 @@ class RAGWorkflow:
         collection_name: str,
         top_k: int = 5,
         thread_id: Optional[str] = None,
-        system_prompt: Optional[str] = None
+        system_prompt: Optional[str] = None,
+        provider: Optional[str] = "openai",
+        api_key: Optional[str] = None
     ) -> dict:
         """
         Run the RAG workflow with conversation memory
@@ -251,6 +287,8 @@ class RAGWorkflow:
             top_k: Number of documents to retrieve
             thread_id: Optional thread ID for conversation memory
             system_prompt: Optional custom system prompt (uses default if not provided)
+            provider: LLM provider to use ("openai" or "gemini", default: "openai")
+            api_key: Optional API key for the provider
             
         Returns:
             Dictionary with answer and retrieved documents
@@ -288,7 +326,9 @@ class RAGWorkflow:
                 "answer": "",
                 "thread_id": thread_id,
                 "conversation_history": conversation_history,
-                "system_prompt": system_prompt
+                "system_prompt": system_prompt,
+                "provider": provider,
+                "api_key": api_key
             }
             
             # Execute the workflow

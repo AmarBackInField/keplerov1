@@ -75,7 +75,13 @@ async def entrypoint(ctx: agents.JobContext):
     agent_instructions = os.getenv("AGENT_INSTRUCTIONS", "You are a helpful voice AI assistant answering inbound calls.")
     language = os.getenv("TTS_LANGUAGE", "en")
     emotion = os.getenv("TTS_EMOTION", "Calm")
+    provider = os.getenv("LLM_PROVIDER", "openai").lower()
+    api_key = os.getenv("LLM_API_KEY")
+    
     logger.info(f"Agent Instructions: {agent_instructions[:100]}...")
+    logger.info(f"LLM Provider: {provider}")
+    if api_key:
+        logger.info(f"Custom API Key: {'***' + api_key[-4:] if len(api_key) > 4 else '***'}")
     
     # Transcript cleanup function
     async def cleanup_and_save():
@@ -111,9 +117,29 @@ async def entrypoint(ctx: agents.JobContext):
         stt_instance = deepgram.STT(model=STT_MODEL, language=STT_LANGUAGE)
         logger.info("✓ STT initialized successfully")
         
-        logger.info("Step 2: Initializing LLM (OpenAI)...")
-        llm_instance = openai.LLM(model=LLM_MODEL)
-        logger.info("✓ LLM initialized successfully")
+        logger.info(f"Step 2: Initializing LLM ({provider})...")
+        
+        # Initialize LLM based on provider
+        if provider == "gemini":
+            if api_key:
+                logger.info("Using Gemini with custom API key")
+                os.environ["GOOGLE_API_KEY"] = api_key
+                llm_instance = google.LLM(model="gemini-2.0-flash-exp")
+                logger.info("✓ Gemini LLM initialized with custom API key")
+            else:
+                logger.warning("Gemini provider selected but no API key provided, falling back to OpenAI")
+                llm_instance = openai.LLM(model=LLM_MODEL)
+                logger.info("✓ OpenAI LLM initialized (fallback)")
+        else:  # default to OpenAI
+            if api_key:
+                logger.info("Using OpenAI with custom API key")
+                os.environ["OPENAI_API_KEY"] = api_key
+                llm_instance = openai.LLM(model="gpt-4o-mini")
+                logger.info("✓ OpenAI LLM initialized with custom API key")
+            else:
+                logger.info("Using default OpenAI configuration")
+                llm_instance = openai.LLM(model=LLM_MODEL)
+                logger.info("✓ OpenAI LLM initialized with default config")
         
         logger.info("Step 3: Initializing TTS (Cartesia)...")
         tts_instance = cartesia.TTS(

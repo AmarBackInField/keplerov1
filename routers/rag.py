@@ -40,12 +40,28 @@ async def chat(request: ChatRequest):
     Chat endpoint that uses LangGraph workflow with retrieval and generation nodes.
     Supports conversation memory via thread_id.
     Stores chatbot instances and chat history in MongoDB.
+    Supports multiple LLM providers (OpenAI, Gemini) with custom API keys.
     
     Args:
-        request: ChatRequest containing query, collection_name, top_k, and optional thread_id
+        request: ChatRequest containing:
+            - query: User's question
+            - collection_name: Qdrant collection name
+            - top_k: Number of documents to retrieve (default: 5)
+            - thread_id: Thread ID for conversation memory (optional)
+            - system_prompt: Custom system prompt (optional)
+            - provider: LLM provider ("openai" or "gemini", default: "openai")
+            - api_key: Custom API key for the provider (optional, uses default if not provided)
         
     Returns:
         ChatResponse with generated answer and retrieved documents
+        
+    Example:
+        {
+            "query": "What is machine learning?",
+            "collection_name": "knowledge_base",
+            "provider": "gemini",
+            "api_key": "your-gemini-api-key"
+        }
     """
     try:
         log_info(f"Chat request - Query: '{request.query}', Collection: '{request.collection_name}', Thread: '{request.thread_id}'")
@@ -77,12 +93,15 @@ async def chat(request: ChatRequest):
             # Continue even if instance management fails
         
         # Run the RAG workflow (retrieve + generate)
+        log_info(f"Using provider: {request.provider}, Custom API key provided: {bool(request.api_key)}")
         result = rag_workflow.run(
             query=request.query,
             collection_name=request.collection_name,
             top_k=request.top_k,
             thread_id=request.thread_id,
-            system_prompt=request.system_prompt
+            system_prompt=request.system_prompt,
+            provider=request.provider,
+            api_key=request.api_key
         )
         
         log_info(f"Workflow completed - Retrieved {len(result['retrieved_docs'])} documents")

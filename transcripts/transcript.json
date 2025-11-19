@@ -1,116 +1,107 @@
 {
   "items": [
     {
-      "id": "item_abe8fc42d2f6",
+      "id": "item_107dc6f1d2a7",
       "type": "message",
       "role": "assistant",
       "content": [
-        "Ciao Amar, come posso aiutarti oggi come tuo coach finanziario? Hai qualche domanda o esigenza particolare riguardo la gestione delle tue finanze personali o degli investimenti?"
+        "Ciao Amar, come posso aiutarti oggi con i tuoi obiettivi finanziari? Vuoi qualche consiglio su risparmio, investimento o gestione del budget?"
       ],
       "interrupted": false
     },
     {
-      "id": "item_6e1bb2b987cb",
+      "id": "item_6b651172c100",
       "type": "message",
       "role": "user",
       "content": [
-        "Hello. How are you?"
+        "Could you please translate this in English?"
       ],
       "interrupted": false,
-      "transcript_confidence": 0.9604492
+      "transcript_confidence": 0.98535156
     },
     {
-      "id": "item_3766795251d9",
+      "id": "item_d5f2737e6bab",
       "type": "message",
       "role": "assistant",
       "content": [
-        "Ciao Amar, sto bene, grazie! E tu come stai? Come posso aiutarti oggi con le tue finanze?"
-      ],
-      "interrupted": false
-    },
-    {
-      "id": "item_d4c09ee2a5fe",
-      "type": "message",
-      "role": "user",
-      "content": [
-        "Could you please speak in English?"
-      ],
-      "interrupted": false,
-      "transcript_confidence": 0.9892578
-    },
-    {
-      "id": "item_041c1edc73b0",
-      "type": "message",
-      "role": "assistant",
-      "content": [
-        "Of course, Amar! How can I assist you with your financial matters today?"
-      ],
-      "interrupted": false
-    },
-    {
-      "id": "item_262ddd62157c",
-      "type": "message",
-      "role": "user",
-      "content": [
-        "Give me some stock analysis."
-      ],
-      "interrupted": false,
-      "transcript_confidence": 0.96435547
-    },
-    {
-      "id": "item_bcade1d0118f",
-      "type": "message",
-      "role": "user",
-      "content": [
-        "Of today."
-      ],
-      "interrupted": false,
-      "transcript_confidence": 0.9736328
-    },
-    {
-      "id": "item_c54ebaf3837e",
-      "type": "message",
-      "role": "assistant",
-      "content": [
-        "Amar, I don't have real-time access to today's stock market data for specific analyses. However, I can help you understand how to analyze stocks effectively or provide general insights on market trends and investment strategies."
+        "Sure, Amar! Here's the translation of what I said: \n\n\"Hi Amar, how can I assist you today with"
       ],
       "interrupted": true
     },
     {
-      "id": "item_960970f51309",
+      "id": "item_39c7728faa74",
       "type": "message",
       "role": "user",
       "content": [
-        "Amy,"
+        "Well, we did"
       ],
       "interrupted": false,
-      "transcript_confidence": 0.5628662
+      "transcript_confidence": 0.67541504
     },
     {
-      "id": "item_a9139f1309da",
+      "id": "item_00e931645f16",
       "type": "message",
       "role": "assistant",
       "content": [
-        "Hi"
+        "It looks like your message got cut off, Amar. Could you please complete your thought or let me"
       ],
       "interrupted": true
     },
     {
-      "id": "item_c058743503b0",
+      "id": "item_7790565efab4",
       "type": "message",
       "role": "user",
       "content": [
-        "tell me what do you know about me?"
+        "What is your name?"
       ],
       "interrupted": false,
-      "transcript_confidence": 0.9790039
+      "transcript_confidence": 0.94628906
     },
     {
-      "id": "item_2777b47bd5b3",
+      "id": "item_536b5bdbc2af",
+      "type": "message",
+      "role": "user",
+      "content": [
+        "What is your name? I"
+      ],
+      "interrupted": false,
+      "transcript_confidence": 0.9812012
+    },
+    {
+      "id": "item_4ea9fcb3d2b6",
+      "type": "message",
+      "role": "user",
+      "content": [
+        "I want to ask this."
+      ],
+      "interrupted": false,
+      "transcript_confidence": 0.9873047
+    },
+    {
+      "id": "item_a06e192c44cc",
       "type": "message",
       "role": "assistant",
       "content": [
-        "Amar, from our conversation, I know that you reached out for financial coaching and that you prefer communicating in English. Beyond that, I don't have"
+        "My name is your financial coach. I'm here to help you with any financial questions or guidance you need, Amar. What would you like to"
+      ],
+      "interrupted": true
+    },
+    {
+      "id": "item_218ab20675ef",
+      "type": "message",
+      "role": "user",
+      "content": [
+        "What kind of guidance you will be able to give?"
+      ],
+      "interrupted": false,
+      "transcript_confidence": 0.9921875
+    },
+    {
+      "id": "item_9e73ecbcd293",
+      "type": "message",
+      "role": "assistant",
+      "content": [
+        "Amar, I can provide guidance on a variety of financial topics"
       ],
       "interrupted": true
     }

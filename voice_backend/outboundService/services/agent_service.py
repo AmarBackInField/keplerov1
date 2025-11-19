@@ -3,7 +3,7 @@ import json
 import asyncio
 import logging
 import sys
-import smtplib
+import aiosmtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime
@@ -47,6 +47,12 @@ SMTP_FROM_EMAIL = os.getenv("EMAIL_ADDRESS", SMTP_USERNAME)
 # Tools registry path
 TOOLS_FILE = Path(__file__).parent.parent.parent.parent / "tools.json"
 
+# Global caches to avoid repeated file I/O during conversation
+_TOOLS_CACHE = None
+_DYNAMIC_CONFIG_CACHE = None
+_CACHE_TIMESTAMP = 0
+CACHE_TTL = 60  # Cache for 60 seconds
+
 # ------------------------------------------------------------
 # Logging setup
 # ------------------------------------------------------------
@@ -72,15 +78,25 @@ logger.info("=" * 60)
 
 
 # ------------------------------------------------------------
-# Utility: Load registered tools from tools.json
+# Utility: Load registered tools from tools.json (with caching)
 # ------------------------------------------------------------
 def load_registered_tools():
     """
-    Load registered tools from tools.json file.
+    Load registered tools from tools.json file with caching.
+    Cache is refreshed every CACHE_TTL seconds to avoid blocking I/O during conversation.
     
     Returns:
         Dictionary of tools indexed by tool_id
     """
+    global _TOOLS_CACHE, _CACHE_TIMESTAMP
+    import time
+    
+    current_time = time.time()
+    
+    # Return cached tools if still valid
+    if _TOOLS_CACHE is not None and (current_time - _CACHE_TIMESTAMP) < CACHE_TTL:
+        return _TOOLS_CACHE
+    
     try:
         if not TOOLS_FILE.exists():
             logger.warning(f"Tools file not found at {TOOLS_FILE}")
@@ -89,11 +105,16 @@ def load_registered_tools():
         with open(TOOLS_FILE, 'r', encoding='utf-8') as f:
             tools = json.load(f)
         
-        logger.info(f"Loaded {len(tools)} registered tools")
+        # Update cache
+        _TOOLS_CACHE = tools
+        _CACHE_TIMESTAMP = current_time
+        
+        logger.info(f"Loaded {len(tools)} registered tools (cached for {CACHE_TTL}s)")
         return tools
     except Exception as e:
         logger.error(f"Error loading tools: {str(e)}")
-        return {}
+        # Return stale cache if available, otherwise empty dict
+        return _TOOLS_CACHE if _TOOLS_CACHE is not None else {}
 
 
 def get_tool_by_name(tool_name: str) -> Optional[dict]:
@@ -113,9 +134,9 @@ def get_tool_by_name(tool_name: str) -> Optional[dict]:
     return None
 
 
-def send_smtp_email(to: str, subject: str, body: str, cc: Optional[str] = None):
+async def send_smtp_email(to: str, subject: str, body: str, cc: Optional[str] = None):
     """
-    Send an email using SMTP.
+    Send an email using SMTP asynchronously (non-blocking).
     
     Args:
         to: Recipient email address
@@ -139,20 +160,24 @@ def send_smtp_email(to: str, subject: str, body: str, cc: Optional[str] = None):
         # Attach body
         msg.attach(MIMEText(body, 'plain'))
         
-        # Connect to SMTP server
+        # Build recipient list
+        recipients = [to]
+        if cc:
+            recipients.append(cc)
+        
+        # Connect to SMTP server asynchronously
         logger.info(f"Connecting to SMTP server: {SMTP_SERVER}:{SMTP_PORT}")
-        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
-            server.starttls()
-            server.login(SMTP_USERNAME, SMTP_PASSWORD)
-            
-            # Send email
-            recipients = [to]
-            if cc:
-                recipients.append(cc)
-            
-            server.sendmail(SMTP_FROM_EMAIL, recipients, msg.as_string())
-            logger.info(f"Email sent successfully to {to}")
-            return True
+        
+        # Use async SMTP client
+        smtp = aiosmtplib.SMTP(hostname=SMTP_SERVER, port=SMTP_PORT)
+        await smtp.connect()
+        await smtp.starttls()
+        await smtp.login(SMTP_USERNAME, SMTP_PASSWORD)
+        await smtp.sendmail(SMTP_FROM_EMAIL, recipients, msg.as_string())
+        await smtp.quit()
+        
+        logger.info(f"Email sent successfully to {to}")
+        return True
             
     except Exception as e:
         logger.error(f"Failed to send email: {str(e)}")
@@ -219,9 +244,18 @@ class Assistant(Agent):
             logger.error("Job context not found")
             return "error"
         
-        # Load transfer_to from dynamic config
-        dynamic_config = load_dynamic_config()
-        transfer_to_number = dynamic_config.get("transfer_to", "+919911062767")
+        # Load transfer_to from dynamic config (using cache to avoid blocking I/O)
+        global _DYNAMIC_CONFIG_CACHE, _CACHE_TIMESTAMP
+        import time
+        
+        current_time = time.time()
+        
+        # Refresh cache if expired
+        if _DYNAMIC_CONFIG_CACHE is None or (current_time - _CACHE_TIMESTAMP) >= CACHE_TTL:
+            _DYNAMIC_CONFIG_CACHE = load_dynamic_config()
+            _CACHE_TIMESTAMP = current_time
+        
+        transfer_to_number = _DYNAMIC_CONFIG_CACHE.get("transfer_to", "+919911062767")
         
         # Ensure the transfer_to number has the "tel:" prefix for SIP
         if not transfer_to_number.startswith("tel:"):
@@ -285,6 +319,7 @@ class Assistant(Agent):
     ) -> str:
         """
         Send an email using a registered tool from tools.json.
+        Email is sent in background to avoid blocking the conversation.
         
         Args:
             tool_name: Name of the registered email tool (e.g., "confirm_appoinment")
@@ -294,12 +329,12 @@ class Assistant(Agent):
             cc: CC email address (optional)
             
         Returns:
-            "success" if email sent successfully, "error" otherwise
+            "success" if email queued successfully, "error" otherwise
         """
         try:
             logger.info(f"Attempting to send email using tool: {tool_name}")
             
-            # Load the tool configuration
+            # Load the tool configuration (using cache)
             tool = get_tool_by_name(tool_name)
             if not tool:
                 logger.error(f"Tool '{tool_name}' not found in registry")
@@ -331,24 +366,22 @@ class Assistant(Agent):
                 logger.error("Email body is required")
                 return "error: body required"
             
-            logger.info(f"Sending email to: {to}")
+            logger.info(f"Queueing email to: {to}")
             logger.info(f"Subject: {final_subject}")
             logger.info(f"Tool: {tool_name}")
             
-            # Send email using SMTP (only pass cc if it has a value)
-            success = send_smtp_email(
-                to=to,
-                subject=final_subject,
-                body=final_body,
-                cc=final_cc if final_cc else None
+            # Send email in background (fire and forget - don't block conversation)
+            asyncio.create_task(
+                send_smtp_email(
+                    to=to,
+                    subject=final_subject,
+                    body=final_body,
+                    cc=final_cc if final_cc else None
+                )
             )
             
-            if success:
-                logger.info(f"Email sent successfully using tool '{tool_name}'")
-                return "success"
-            else:
-                logger.error("Failed to send email")
-                return "error: failed to send"
+            logger.info(f"Email queued successfully using tool '{tool_name}'")
+            return "success: email queued"
                 
         except Exception as e:
             logger.error(f"Error in send_email_tool: {str(e)}", exc_info=True)
@@ -374,6 +407,8 @@ async def entrypoint(ctx: agents.JobContext):
         language = dynamic_config.get("tts_language", "en")
         voice_id = dynamic_config.get("voice_id", "21m00Tcm4TlvDq8ikWAM")
         escalation_condition = dynamic_config.get("escalation_condition")
+        provider = dynamic_config.get("provider", "openai").lower()
+        api_key = dynamic_config.get("api_key")
 
         # Build full instructions with escalation condition if provided
         if escalation_condition:
@@ -415,6 +450,9 @@ async def entrypoint(ctx: agents.JobContext):
         logger.info(f"  - Caller Name: {caller_name}")
         logger.info(f"  - TTS Language: {language}")
         logger.info(f"  - Voice ID: {voice_id}")
+        logger.info(f"  - LLM Provider: {provider}")
+        if api_key:
+            logger.info(f"  - Custom API Key: {'***' + api_key[-4:] if len(api_key) > 4 else '***'}")
         logger.info(f"  - Agent Instructions: {dynamic_instruction[:100]}...")
         if escalation_condition:
             logger.info(f"  - Escalation Condition: {escalation_condition}")
@@ -424,27 +462,29 @@ async def entrypoint(ctx: agents.JobContext):
         if len(instructions) > 500:
             logger.info(f"  - Total Instruction Length: {len(instructions)} characters")
         
-        # Write full instructions to a debug file for inspection
-        try:
-            debug_file = Path("agent_instructions_debug.txt")
-            with open(debug_file, 'w', encoding='utf-8') as f:
-                f.write("=" * 80 + "\n")
-                f.write("FULL AI AGENT INSTRUCTIONS\n")
-                f.write("=" * 80 + "\n\n")
-                f.write(instructions)
-                f.write("\n\n" + "=" * 80 + "\n")
-            logger.info(f"  - Full instructions written to: {debug_file}")
-        except Exception as e:
-            logger.warning(f"Could not write debug file: {str(e)}")
+        # # Write full instructions to a debug file for inspection
+        # try:
+        #     debug_file = Path("agent_instructions_debug.txt")
+        #     with open(debug_file, 'w', encoding='utf-8') as f:
+        #         f.write("=" * 80 + "\n")
+        #         f.write("FULL AI AGENT INSTRUCTIONS\n")
+        #         f.write("=" * 80 + "\n\n")
+        #         f.write(instructions)
+        #         f.write("\n\n" + "=" * 80 + "\n")
+        #     logger.info(f"  - Full instructions written to: {debug_file}")
+        # except Exception as e:
+        #     logger.warning(f"Could not write debug file: {str(e)}")
     except Exception as e:
         logger.warning(f"Failed to load dynamic config, using defaults: {str(e)}")
         caller_name = "Guest"
         instructions = "You are a helpful voice AI assistant."
         language = "en"
         voice_id = "21m00Tcm4TlvDq8ikWAM"
+        provider = "openai"
+        api_key = None
     
     # Static config from environment
-    # room_prefix_for_cleanup = os.getenv("ROOM_CLEANUP_PREFIX", "my-assistant-room")
+    room_prefix_for_cleanup = os.getenv("ROOM_CLEANUP_PREFIX", "agent-room")
 
     # --------------------------------------------------------
     # Prepare cleanup callback (save transcript and clean resources)
@@ -483,16 +523,47 @@ async def entrypoint(ctx: agents.JobContext):
         logger.info("Step 1: Initializing STT (Deepgram)")
         stt_instance = deepgram.STT(model=STT_MODEL, language=STT_LANGUAGE)
 
-        logger.info("Step 2: Initializing LLM (OpenAI)")
-        llm_instance = openai.LLM(model=LLM_MODEL)
+        logger.info(f"Step 2: Initializing LLM ({provider})")
+        
+        # Initialize LLM based on provider from config
+        if provider == "gemini":
+            if api_key:
+                logger.info("Using Gemini with custom API key")
+                # Set the API key in environment for Google plugin
+                os.environ["GOOGLE_API_KEY"] = api_key
+                llm_instance = google.LLM(model="gemini-2.5-pro")
+                logger.info("[OK] Gemini LLM initialized with custom API key")
+            else:
+                logger.warning("Gemini provider selected but no API key provided, falling back to OpenAI")
+                llm_instance = openai.LLM(model=LLM_MODEL)
+                logger.info("[OK] OpenAI LLM initialized (fallback)")
+        else:  # default to OpenAI
+            if api_key:
+                logger.info("Using OpenAI with custom API key")
+                # Set the API key in environment for OpenAI plugin
+                os.environ["OPENAI_API_KEY"] = api_key
+                llm_instance = openai.LLM(model="gpt-4.1-mini")
+                logger.info("[OK] OpenAI LLM initialized with custom API key")
+            else:
+                logger.info("Using default OpenAI configuration")
+                llm_instance = openai.LLM(model=LLM_MODEL)
+                logger.info("[OK] OpenAI LLM initialized with default config")
 
         logger.info("Step 3: Initializing TTS (ElevenLabs)")
         try:
             tts_instance = elevenlabs.TTS(
                 voice_id=voice_id,
                 language=language,
-                model="eleven_multilingual_v2"
+                model="eleven_turbo_v2_5"
             )
+        #     tts_instance = cartesia.TTS(
+        #     model='sonic-3',
+        #     voice='a0e99841-438c-4a64-b679-ae501e7d6091',
+        #     language='en',
+        #     speed=1.0,
+        #     sample_rate=24000
+        # )
+
             logger.info("[OK] ElevenLabs TTS initialized successfully")
         except Exception as tts_error:
             logger.warning(f"ElevenLabs TTS initialization failed: {tts_error}")
@@ -515,7 +586,7 @@ async def entrypoint(ctx: agents.JobContext):
     # Optional: cleanup previous rooms BEFORE connecting
     # --------------------------------------------------------
     try:
-        await cleanup_previous_rooms(LIVEKIT_API_KEY, LIVEKIT_API_SECRET, LIVEKIT_URL, prefix=room_prefix_for_cleanup)
+        # await cleanup_previous_rooms(LIVEKIT_API_KEY, LIVEKIT_API_SECRET, LIVEKIT_URL, prefix=room_prefix_for_cleanup)
         # Small delay to ensure room cleanup completes on server side
         await asyncio.sleep(0.5)
     except Exception as e:
@@ -556,7 +627,7 @@ async def entrypoint(ctx: agents.JobContext):
     # --------------------------------------------------------
     # Greeting logic AFTER session start and stream stabilization
     # --------------------------------------------------------
-    await asyncio.sleep(2)  # Let audio streams stabilize
+    # await asyncio.sleep(2)  # Let audio streams stabilize
 
     # Multi-language greeting support
     greetings = {

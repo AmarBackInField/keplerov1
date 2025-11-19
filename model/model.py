@@ -30,6 +30,8 @@ class ChatRequest(BaseModel):
     top_k: Optional[int] = 5
     thread_id: Optional[str] = None
     system_prompt: Optional[str] = None
+    provider: Optional[str] = "openai"  # "openai" or "gemini"
+    api_key: Optional[str] = None  # Custom API key for the provider
 
 
 class ChatResponse(BaseModel):
@@ -72,6 +74,8 @@ class OutboundCallRequest(BaseModel):
     sip_trunk_id: Optional[str] = None  # SIP trunk ID (uses env variable if not provided)
     transfer_to: Optional[str] = None  # Phone number to transfer to (e.g., +1234567890)
     escalation_condition: Optional[str] = None  # Condition when to escalate/transfer the call
+    provider: Optional[str] = "openai"  # LLM provider ("openai" or "gemini")
+    api_key: Optional[str] = None  # Custom API key for the provider
 
 
 # ============================================================================
@@ -225,3 +229,95 @@ class DeleteToolResponse(BaseModel):
     status: str
     message: str
     tool_id: str
+
+
+# ============================================================================
+# SIP TRUNK SETUP MODELS
+# ============================================================================
+
+class CreateSIPTrunkRequest(BaseModel):
+    """Request model for creating SIP trunk setup."""
+    label: str
+    phone_number: str
+    twilio_sid: str
+    twilio_auth_token: str
+
+
+class CreateSIPTrunkResponse(BaseModel):
+    """Response model for SIP trunk setup."""
+    status: str
+    message: str
+    twilio_trunk_sid: str
+    livekit_trunk_id: str
+    credential_list_sid: str
+    username: str
+
+
+class CreateLiveKitTrunkRequest(BaseModel):
+    """Request model for creating only LiveKit SIP trunk from existing Twilio trunk."""
+    label: str
+    phone_number: str
+    sip_address: str  # e.g., example.pstn.twilio.com
+    username: str
+    password: str
+
+
+class CreateLiveKitTrunkResponse(BaseModel):
+    """Response model for LiveKit trunk creation."""
+    status: str
+    message: str
+    livekit_trunk_id: str
+    sip_address: str
+    phone_number: str
+
+
+class CreateInboundTrunkRequest(BaseModel):
+    """Request model for creating inbound SIP trunk."""
+    name: str
+    phone_numbers: list[str]  # List of phone numbers (e.g., ["+1234567890"])
+    allowed_numbers: Optional[list[str]] = None  # Optional whitelist
+    krisp_enabled: Optional[bool] = True  # Enable noise cancellation
+
+
+class CreateInboundTrunkResponse(BaseModel):
+    """Response model for inbound trunk creation."""
+    status: str
+    message: str
+    trunk_id: str
+    trunk_name: str
+    phone_numbers: list[str]
+
+
+class CreateDispatchRuleRequest(BaseModel):
+    """Request model for creating dispatch rule."""
+    name: str
+    trunk_ids: list[str]  # List of trunk IDs to attach
+    room_name: str  # Room name to dispatch to
+    room_prefix: Optional[str] = None  # Optional room prefix for dynamic rooms
+
+
+class CreateDispatchRuleResponse(BaseModel):
+    """Response model for dispatch rule creation."""
+    status: str
+    message: str
+    dispatch_rule_id: str
+    dispatch_rule_name: str
+
+
+class SetupInboundSIPRequest(BaseModel):
+    """Request model for complete inbound SIP setup."""
+    name: str
+    phone_numbers: list[str]
+    room_name: str  # Room to dispatch calls to
+    allowed_numbers: Optional[list[str]] = None
+    krisp_enabled: Optional[bool] = True
+
+
+class SetupInboundSIPResponse(BaseModel):
+    """Response model for complete inbound SIP setup."""
+    status: str
+    message: str
+    trunk_id: str
+    dispatch_rule_id: str
+    phone_numbers: list[str]
+    room_name: str
