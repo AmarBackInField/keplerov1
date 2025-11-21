@@ -19,6 +19,7 @@ from routers.sms import router as sms_router
 from routers.email import router as email_router
 from routers.bulk_communication import router as bulk_communication_router
 from routers.tools import router as tools_router
+from routers.integration import router as integration_router
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -94,6 +95,7 @@ app.include_router(sms_router)
 app.include_router(email_router)
 app.include_router(bulk_communication_router)
 app.include_router(tools_router)
+app.include_router(integration_router)
 
 
 @app.get("/")
@@ -158,6 +160,23 @@ async def root():
                     "GET /tools/list - List all registered tools",
                     "GET /tools/get/{tool_id} - Get a specific tool by ID"
                 ]
+            },
+            "Integration": {
+                "prefix": "/integration",
+                "endpoints": [
+                    "POST /integration/setup/{platform} - Setup integration (shopify, woocommerce, magento2, prestashop, qapla, vertical-booking, booking-expert, mcp, google-sheets)",
+                    "POST /integration/ecommerce/{integration_name}/execute - Execute e-commerce operations (products, orders)",
+                    "POST /integration/booking/{integration_name}/generate-link - Generate booking links",
+                    "POST /integration/mcp/request - Make HTTP request using MCP client",
+                    "GET /integration/registry/list-all - List all available integrations",
+                    "GET /integration/registry/by-category/{category} - List integrations by category",
+                    "GET /integration/registry/by-tag/{tag} - List integrations by tag",
+                    "GET /integration/registry/search - Search integrations",
+                    "GET /integration/status/initialized - List initialized integrations",
+                    "GET /integration/status/test-connections - Test all connections",
+                    "DELETE /integration/remove/{integration_name} - Remove integration",
+                    "DELETE /integration/remove-all - Remove all integrations"
+                ]
             }
         }
     }
@@ -176,7 +195,8 @@ async def health_check():
             "sms": "operational",
             "email": "operational",
             "bulk_communication": "operational",
-            "tools": "operational"
+            "tools": "operational",
+            "integration": "operational"
         }
     }
 
