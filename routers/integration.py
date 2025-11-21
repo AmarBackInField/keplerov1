@@ -113,9 +113,10 @@ class BookingLinkRequestModel(BaseModel):
 
 class EcommerceRequestModel(BaseModel):
     """Request model for e-commerce operations"""
-    operation: str = Field(..., description="Operation type: list_products, get_product, list_orders, get_order")
-    product_id: Optional[Any] = Field(default=None, description="Product ID (for get_product)")
+    operation: str = Field(..., description="Operation type: list_products, get_product, update_product, list_orders, get_order")
+    product_id: Optional[Any] = Field(default=None, description="Product ID (for get_product/update_product)")
     order_id: Optional[Any] = Field(default=None, description="Order ID (for get_order)")
+    update_data: Optional[Dict[str, Any]] = Field(default=None, description="Data for update_product operation")
     limit: Optional[int] = Field(default=50, description="Limit for list operations")
     page: Optional[int] = Field(default=1, description="Page number")
 
@@ -125,6 +126,23 @@ class MCPRequestModel(BaseModel):
     method: str = Field(default="GET", description="HTTP method")
     data: Optional[Dict[str, Any]] = Field(default=None, description="Request data")
     params: Optional[Dict[str, Any]] = Field(default=None, description="Query parameters")
+
+
+class GoogleSheetsAppendRowModel(BaseModel):
+    """Request model for appending a single row to Google Sheets"""
+    row_data: List[Any] = Field(..., description="List of values for the row")
+
+
+class GoogleSheetsAppendRowsModel(BaseModel):
+    """Request model for appending multiple rows to Google Sheets"""
+    rows_data: List[List[Any]] = Field(..., description="List of rows, each row is a list of values")
+
+
+class GoogleSheetsUpdateCellModel(BaseModel):
+    """Request model for updating a specific cell"""
+    row: int = Field(..., description="Row number (1-indexed)")
+    col: int = Field(..., description="Column number (1-indexed)")
+    value: Any = Field(..., description="Value to write to the cell")
 
 
 # ==================== Integration Setup Endpoints ====================
@@ -369,7 +387,736 @@ async def setup_google_sheets(config: GoogleSheetsConfigModel):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ==================== E-commerce Operations ====================
+@router.post("/setup/google-sheets", tags=["Setup"])
+async def setup_google_sheets(config: GoogleSheetsConfigModel):
+    """
+    Initialize and register Google Sheets integration
+    
+    **Tags**: automation, sheets, analytics
+    """
+    try:
+        client = KeplerGoogleSheet(
+            creds_json_path=config.creds_json_path,
+            sheet_name=config.sheet_name,
+            worksheet_name=config.worksheet_name
+        )
+        integration_router.register_client("google_sheets", client)
+        
+        return {
+            "status": "success",
+            "message": "Google Sheets integration initialized successfully",
+            "integration": "google_sheets",
+            "category": "automation",
+            "tags": ["sheets", "analytics"]
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== Shopify Specific Endpoints ====================
+
+@router.get("/shopify/products", tags=["Shopify"])
+async def shopify_get_all_products(limit: int = 50):
+    """Get all products from Shopify"""
+    try:
+        if not integration_router.has_client("shopify"):
+            raise HTTPException(status_code=404, detail="Shopify not initialized. Please setup first.")
+        
+        client = integration_router.get_client("shopify")
+        result = client.get_all_products(limit=limit)
+        
+        return {
+            "status": "success",
+            "integration": "shopify",
+            "data": result
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/shopify/products/{product_id}", tags=["Shopify"])
+async def shopify_get_product(product_id: int):
+    """Get single product from Shopify by ID"""
+    try:
+        if not integration_router.has_client("shopify"):
+            raise HTTPException(status_code=404, detail="Shopify not initialized. Please setup first.")
+        
+        client = integration_router.get_client("shopify")
+        result = client.get_product(product_id)
+        
+        return {
+            "status": "success",
+            "integration": "shopify",
+            "data": result
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/shopify/products/{product_id}", tags=["Shopify"])
+async def shopify_update_product(product_id: int, update_data: Dict[str, Any] = Body(...)):
+    """Update product in Shopify"""
+    try:
+        if not integration_router.has_client("shopify"):
+            raise HTTPException(status_code=404, detail="Shopify not initialized. Please setup first.")
+        
+        client = integration_router.get_client("shopify")
+        result = client.update_product(product_id, update_data)
+        
+        return {
+            "status": "success",
+            "integration": "shopify",
+            "data": result
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/shopify/orders", tags=["Shopify"])
+async def shopify_get_all_orders(limit: int = 50):
+    """Get all orders from Shopify"""
+    try:
+        if not integration_router.has_client("shopify"):
+            raise HTTPException(status_code=404, detail="Shopify not initialized. Please setup first.")
+        
+        client = integration_router.get_client("shopify")
+        result = client.get_all_orders(limit=limit)
+        
+        return {
+            "status": "success",
+            "integration": "shopify",
+            "data": result
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/shopify/orders/{order_id}", tags=["Shopify"])
+async def shopify_get_order(order_id: int):
+    """Get single order from Shopify by ID"""
+    try:
+        if not integration_router.has_client("shopify"):
+            raise HTTPException(status_code=404, detail="Shopify not initialized. Please setup first.")
+        
+        client = integration_router.get_client("shopify")
+        result = client.get_order(order_id)
+        
+        return {
+            "status": "success",
+            "integration": "shopify",
+            "data": result
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/shopify/test-connection", tags=["Shopify"])
+async def shopify_test_connection():
+    """Test Shopify API connection"""
+    try:
+        if not integration_router.has_client("shopify"):
+            raise HTTPException(status_code=404, detail="Shopify not initialized. Please setup first.")
+        
+        client = integration_router.get_client("shopify")
+        result = client.test_connection()
+        
+        return {
+            "status": "success",
+            "integration": "shopify",
+            "connected": result
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== WooCommerce Specific Endpoints ====================
+
+@router.get("/woocommerce/products", tags=["WooCommerce"])
+async def woocommerce_list_products(per_page: int = 50):
+    """Get all products from WooCommerce"""
+    try:
+        if not integration_router.has_client("woocommerce"):
+            raise HTTPException(status_code=404, detail="WooCommerce not initialized. Please setup first.")
+        
+        client = integration_router.get_client("woocommerce")
+        result = client.list_products(per_page=per_page)
+        
+        return {
+            "status": "success",
+            "integration": "woocommerce",
+            "data": result
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/woocommerce/products/{product_id}", tags=["WooCommerce"])
+async def woocommerce_get_product(product_id: int):
+    """Get single product from WooCommerce by ID"""
+    try:
+        if not integration_router.has_client("woocommerce"):
+            raise HTTPException(status_code=404, detail="WooCommerce not initialized. Please setup first.")
+        
+        client = integration_router.get_client("woocommerce")
+        result = client.get_product(product_id)
+        
+        return {
+            "status": "success",
+            "integration": "woocommerce",
+            "data": result
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/woocommerce/products/{product_id}", tags=["WooCommerce"])
+async def woocommerce_update_product(product_id: int, update_data: Dict[str, Any] = Body(...)):
+    """Update product in WooCommerce"""
+    try:
+        if not integration_router.has_client("woocommerce"):
+            raise HTTPException(status_code=404, detail="WooCommerce not initialized. Please setup first.")
+        
+        client = integration_router.get_client("woocommerce")
+        result = client.update_product(product_id, update_data)
+        
+        return {
+            "status": "success",
+            "integration": "woocommerce",
+            "data": result
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/woocommerce/orders", tags=["WooCommerce"])
+async def woocommerce_list_orders(per_page: int = 50):
+    """Get all orders from WooCommerce"""
+    try:
+        if not integration_router.has_client("woocommerce"):
+            raise HTTPException(status_code=404, detail="WooCommerce not initialized. Please setup first.")
+        
+        client = integration_router.get_client("woocommerce")
+        result = client.list_orders(per_page=per_page)
+        
+        return {
+            "status": "success",
+            "integration": "woocommerce",
+            "data": result
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/woocommerce/orders/{order_id}", tags=["WooCommerce"])
+async def woocommerce_get_order(order_id: int):
+    """Get single order from WooCommerce by ID"""
+    try:
+        if not integration_router.has_client("woocommerce"):
+            raise HTTPException(status_code=404, detail="WooCommerce not initialized. Please setup first.")
+        
+        client = integration_router.get_client("woocommerce")
+        result = client.get_order(order_id)
+        
+        return {
+            "status": "success",
+            "integration": "woocommerce",
+            "data": result
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/woocommerce/test-connection", tags=["WooCommerce"])
+async def woocommerce_test_connection():
+    """Test WooCommerce API connection"""
+    try:
+        if not integration_router.has_client("woocommerce"):
+            raise HTTPException(status_code=404, detail="WooCommerce not initialized. Please setup first.")
+        
+        client = integration_router.get_client("woocommerce")
+        result = client.test_connection()
+        
+        return {
+            "status": "success",
+            "integration": "woocommerce",
+            "connected": result
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== Magento2 Specific Endpoints ====================
+
+@router.get("/magento2/products", tags=["Magento2"])
+async def magento2_list_products(page_size: int = 50, current_page: int = 1):
+    """Get all products from Magento2"""
+    try:
+        if not integration_router.has_client("magento2"):
+            raise HTTPException(status_code=404, detail="Magento2 not initialized. Please setup first.")
+        
+        client = integration_router.get_client("magento2")
+        result = client.list_products(page_size=page_size, current_page=current_page)
+        
+        return {
+            "status": "success",
+            "integration": "magento2",
+            "data": result
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/magento2/products/{sku}", tags=["Magento2"])
+async def magento2_get_product(sku: str):
+    """Get single product from Magento2 by SKU"""
+    try:
+        if not integration_router.has_client("magento2"):
+            raise HTTPException(status_code=404, detail="Magento2 not initialized. Please setup first.")
+        
+        client = integration_router.get_client("magento2")
+        result = client.get_product(sku)
+        
+        return {
+            "status": "success",
+            "integration": "magento2",
+            "data": result
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/magento2/products/{sku}", tags=["Magento2"])
+async def magento2_update_product(sku: str, update_data: Dict[str, Any] = Body(...)):
+    """Update product in Magento2"""
+    try:
+        if not integration_router.has_client("magento2"):
+            raise HTTPException(status_code=404, detail="Magento2 not initialized. Please setup first.")
+        
+        client = integration_router.get_client("magento2")
+        result = client.update_product(sku, update_data)
+        
+        return {
+            "status": "success",
+            "integration": "magento2",
+            "data": result
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/magento2/orders", tags=["Magento2"])
+async def magento2_list_orders(page_size: int = 50, current_page: int = 1):
+    """Get all orders from Magento2"""
+    try:
+        if not integration_router.has_client("magento2"):
+            raise HTTPException(status_code=404, detail="Magento2 not initialized. Please setup first.")
+        
+        client = integration_router.get_client("magento2")
+        result = client.list_orders(page_size=page_size, current_page=current_page)
+        
+        return {
+            "status": "success",
+            "integration": "magento2",
+            "data": result
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/magento2/orders/{order_id}", tags=["Magento2"])
+async def magento2_get_order(order_id: int):
+    """Get single order from Magento2 by ID"""
+    try:
+        if not integration_router.has_client("magento2"):
+            raise HTTPException(status_code=404, detail="Magento2 not initialized. Please setup first.")
+        
+        client = integration_router.get_client("magento2")
+        result = client.get_order(order_id)
+        
+        return {
+            "status": "success",
+            "integration": "magento2",
+            "data": result
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/magento2/test-connection", tags=["Magento2"])
+async def magento2_test_connection():
+    """Test Magento2 API connection"""
+    try:
+        if not integration_router.has_client("magento2"):
+            raise HTTPException(status_code=404, detail="Magento2 not initialized. Please setup first.")
+        
+        client = integration_router.get_client("magento2")
+        result = client.test_connection()
+        
+        return {
+            "status": "success",
+            "integration": "magento2",
+            "connected": result
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== PrestaShop Specific Endpoints ====================
+
+@router.get("/prestashop/products", tags=["PrestaShop"])
+async def prestashop_list_products(limit: int = 50, offset: int = 0):
+    """Get all products from PrestaShop"""
+    try:
+        if not integration_router.has_client("prestashop"):
+            raise HTTPException(status_code=404, detail="PrestaShop not initialized. Please setup first.")
+        
+        client = integration_router.get_client("prestashop")
+        result = client.list_products(limit=limit, offset=offset)
+        
+        return {
+            "status": "success",
+            "integration": "prestashop",
+            "data": result
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/prestashop/products/{product_id}", tags=["PrestaShop"])
+async def prestashop_get_product(product_id: int):
+    """Get single product from PrestaShop by ID"""
+    try:
+        if not integration_router.has_client("prestashop"):
+            raise HTTPException(status_code=404, detail="PrestaShop not initialized. Please setup first.")
+        
+        client = integration_router.get_client("prestashop")
+        result = client.get_product(product_id)
+        
+        return {
+            "status": "success",
+            "integration": "prestashop",
+            "data": result
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/prestashop/orders", tags=["PrestaShop"])
+async def prestashop_list_orders(limit: int = 50, offset: int = 0):
+    """Get all orders from PrestaShop"""
+    try:
+        if not integration_router.has_client("prestashop"):
+            raise HTTPException(status_code=404, detail="PrestaShop not initialized. Please setup first.")
+        
+        client = integration_router.get_client("prestashop")
+        result = client.list_orders(limit=limit, offset=offset)
+        
+        return {
+            "status": "success",
+            "integration": "prestashop",
+            "data": result
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/prestashop/orders/{order_id}", tags=["PrestaShop"])
+async def prestashop_get_order(order_id: int):
+    """Get single order from PrestaShop by ID"""
+    try:
+        if not integration_router.has_client("prestashop"):
+            raise HTTPException(status_code=404, detail="PrestaShop not initialized. Please setup first.")
+        
+        client = integration_router.get_client("prestashop")
+        result = client.get_order(order_id)
+        
+        return {
+            "status": "success",
+            "integration": "prestashop",
+            "data": result
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/prestashop/test-connection", tags=["PrestaShop"])
+async def prestashop_test_connection():
+    """Test PrestaShop API connection"""
+    try:
+        if not integration_router.has_client("prestashop"):
+            raise HTTPException(status_code=404, detail="PrestaShop not initialized. Please setup first.")
+        
+        client = integration_router.get_client("prestashop")
+        result = client.test_connection()
+        
+        return {
+            "status": "success",
+            "integration": "prestashop",
+            "connected": result
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== Qapla Specific Endpoints ====================
+
+@router.get("/qapla/products", tags=["Qapla"])
+async def qapla_list_products(page: int = 1, per_page: int = 50):
+    """Get all products from Qapla"""
+    try:
+        if not integration_router.has_client("qapla"):
+            raise HTTPException(status_code=404, detail="Qapla not initialized. Please setup first.")
+        
+        client = integration_router.get_client("qapla")
+        result = client.list_products(page=page, per_page=per_page)
+        
+        return {
+            "status": "success",
+            "integration": "qapla",
+            "data": result
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/qapla/products/{product_id}", tags=["Qapla"])
+async def qapla_get_product(product_id: str):
+    """Get single product from Qapla by ID"""
+    try:
+        if not integration_router.has_client("qapla"):
+            raise HTTPException(status_code=404, detail="Qapla not initialized. Please setup first.")
+        
+        client = integration_router.get_client("qapla")
+        result = client.get_product(product_id)
+        
+        return {
+            "status": "success",
+            "integration": "qapla",
+            "data": result
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/qapla/orders", tags=["Qapla"])
+async def qapla_list_orders(page: int = 1, per_page: int = 50):
+    """Get all orders from Qapla"""
+    try:
+        if not integration_router.has_client("qapla"):
+            raise HTTPException(status_code=404, detail="Qapla not initialized. Please setup first.")
+        
+        client = integration_router.get_client("qapla")
+        result = client.list_orders(page=page, per_page=per_page)
+        
+        return {
+            "status": "success",
+            "integration": "qapla",
+            "data": result
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/qapla/orders/{order_id}", tags=["Qapla"])
+async def qapla_get_order(order_id: str):
+    """Get single order from Qapla by ID"""
+    try:
+        if not integration_router.has_client("qapla"):
+            raise HTTPException(status_code=404, detail="Qapla not initialized. Please setup first.")
+        
+        client = integration_router.get_client("qapla")
+        result = client.get_order(order_id)
+        
+        return {
+            "status": "success",
+            "integration": "qapla",
+            "data": result
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/qapla/test-connection", tags=["Qapla"])
+async def qapla_test_connection():
+    """Test Qapla API connection"""
+    try:
+        if not integration_router.has_client("qapla"):
+            raise HTTPException(status_code=404, detail="Qapla not initialized. Please setup first.")
+        
+        client = integration_router.get_client("qapla")
+        result = client.test_connection()
+        
+        return {
+            "status": "success",
+            "integration": "qapla",
+            "connected": result
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== Vertical Booking Specific Endpoints ====================
+
+@router.post("/vertical-booking/generate-link", tags=["Vertical Booking"])
+async def vertical_booking_generate_link(request: BookingLinkRequestModel):
+    """Generate pre-filled booking link for Vertical Booking"""
+    try:
+        if not integration_router.has_client("vertical_booking"):
+            raise HTTPException(status_code=404, detail="Vertical Booking not initialized. Please setup first.")
+        
+        client = integration_router.get_client("vertical_booking")
+        link = client.generate_booking_link(
+            check_in=request.check_in,
+            check_out=request.check_out,
+            adults=request.adults,
+            children=request.children,
+            extra_params=request.extra_params
+        )
+        
+        return {
+            "status": "success",
+            "integration": "vertical_booking",
+            "booking_link": link
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/vertical-booking/test-connection", tags=["Vertical Booking"])
+async def vertical_booking_test_connection():
+    """Test Vertical Booking connection"""
+    try:
+        if not integration_router.has_client("vertical_booking"):
+            raise HTTPException(status_code=404, detail="Vertical Booking not initialized. Please setup first.")
+        
+        client = integration_router.get_client("vertical_booking")
+        result = client.test_connection()
+        
+        return {
+            "status": "success",
+            "integration": "vertical_booking",
+            "connected": result
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== Booking Expert Specific Endpoints ====================
+
+@router.post("/booking-expert/generate-link", tags=["Booking Expert"])
+async def booking_expert_generate_link(request: BookingLinkRequestModel):
+    """Generate pre-filled booking link for Booking Expert"""
+    try:
+        if not integration_router.has_client("booking_expert"):
+            raise HTTPException(status_code=404, detail="Booking Expert not initialized. Please setup first.")
+        
+        if not request.hotel_id:
+            raise HTTPException(status_code=400, detail="hotel_id is required for Booking Expert")
+        
+        client = integration_router.get_client("booking_expert")
+        link = client.generate_booking_link(
+            hotel_id=request.hotel_id,
+            check_in=request.check_in,
+            check_out=request.check_out,
+            adults=request.adults,
+            teens=request.teens or 0,
+            children=request.children,
+            extra_params=request.extra_params
+        )
+        
+        return {
+            "status": "success",
+            "integration": "booking_expert",
+            "booking_link": link
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/booking-expert/test-connection", tags=["Booking Expert"])
+async def booking_expert_test_connection():
+    """Test Booking Expert connection"""
+    try:
+        if not integration_router.has_client("booking_expert"):
+            raise HTTPException(status_code=404, detail="Booking Expert not initialized. Please setup first.")
+        
+        client = integration_router.get_client("booking_expert")
+        result = client.test_connection()
+        
+        return {
+            "status": "success",
+            "integration": "booking_expert",
+            "connected": result
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== Legacy E-commerce Operations (Keep for backward compatibility) ====================
 
 @router.post("/ecommerce/{integration_name}/execute", tags=["E-commerce"])
 async def execute_ecommerce_operation(
@@ -384,6 +1131,7 @@ async def execute_ecommerce_operation(
     **Operations**:
     - list_products: Get list of products
     - get_product: Get single product details
+    - update_product: Update product details (shopify, woocommerce, magento2)
     - list_orders: Get list of orders
     - get_order: Get single order details
     """
@@ -408,6 +1156,15 @@ async def execute_ecommerce_operation(
             if not request.product_id:
                 raise HTTPException(status_code=400, detail="product_id is required")
             result = client.get_product(request.product_id)
+            
+        elif request.operation == "update_product":
+            if not request.product_id:
+                raise HTTPException(status_code=400, detail="product_id is required")
+            if not request.update_data:
+                raise HTTPException(status_code=400, detail="update_data is required")
+            if not hasattr(client, 'update_product'):
+                raise HTTPException(status_code=400, detail=f"Integration '{integration_name}' does not support update_product")
+            result = client.update_product(request.product_id, request.update_data)
             
         elif request.operation == "list_orders":
             if hasattr(client, 'list_orders'):
@@ -441,60 +1198,6 @@ async def execute_ecommerce_operation(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ==================== Booking Operations ====================
-
-@router.post("/booking/{integration_name}/generate-link", tags=["Booking"])
-async def generate_booking_link(
-    integration_name: str,
-    request: BookingLinkRequestModel
-):
-    """
-    Generate booking links for hotel reservations
-    
-    **Supported integrations**: vertical_booking, booking_expert
-    """
-    try:
-        if not integration_router.has_client(integration_name):
-            raise HTTPException(
-                status_code=404,
-                detail=f"Integration '{integration_name}' not initialized. Please setup first."
-            )
-        
-        client = integration_router.get_client(integration_name)
-        
-        if integration_name == "vertical_booking":
-            link = client.generate_booking_link(
-                check_in=request.check_in,
-                check_out=request.check_out,
-                adults=request.adults,
-                children=request.children,
-                extra_params=request.extra_params
-            )
-        elif integration_name == "booking_expert":
-            if not request.hotel_id:
-                raise HTTPException(status_code=400, detail="hotel_id is required for BookingExpert")
-            link = client.generate_booking_link(
-                hotel_id=request.hotel_id,
-                check_in=request.check_in,
-                check_out=request.check_out,
-                adults=request.adults,
-                teens=request.teens or 0,
-                children=request.children,
-                extra_params=request.extra_params
-            )
-        else:
-            raise HTTPException(status_code=400, detail="Integration does not support booking links")
-        
-        return {
-            "status": "success",
-            "integration": integration_name,
-            "booking_link": link
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ==================== MCP Operations ====================
@@ -524,6 +1227,168 @@ async def mcp_make_request(request: MCPRequestModel):
             "status": "success",
             "method": request.method,
             "data": result
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/mcp/set-header", tags=["Microservice"])
+async def mcp_set_header(key: str = Body(...), value: str = Body(...)):
+    """
+    Set or update a header in MCP client
+    """
+    try:
+        if not integration_router.has_client("mcp"):
+            raise HTTPException(
+                status_code=404,
+                detail="MCP client not initialized. Please setup first."
+            )
+        
+        client = integration_router.get_client("mcp")
+        client.set_header(key, value)
+        
+        return {
+            "status": "success",
+            "message": f"Header '{key}' set successfully"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/mcp/remove-header/{key}", tags=["Microservice"])
+async def mcp_remove_header(key: str):
+    """
+    Remove a header from MCP client
+    """
+    try:
+        if not integration_router.has_client("mcp"):
+            raise HTTPException(
+                status_code=404,
+                detail="MCP client not initialized. Please setup first."
+            )
+        
+        client = integration_router.get_client("mcp")
+        client.remove_header(key)
+        
+        return {
+            "status": "success",
+            "message": f"Header '{key}' removed successfully"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== Google Sheets Operations ====================
+
+@router.post("/google-sheets/append-row", tags=["Automation"])
+async def google_sheets_append_row(request: GoogleSheetsAppendRowModel):
+    """
+    Append a single row to Google Sheet
+    """
+    try:
+        if not integration_router.has_client("google_sheets"):
+            raise HTTPException(
+                status_code=404,
+                detail="Google Sheets integration not initialized. Please setup first."
+            )
+        
+        client = integration_router.get_client("google_sheets")
+        client.append_row(request.row_data)
+        
+        return {
+            "status": "success",
+            "message": "Row appended successfully",
+            "row_data": request.row_data
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/google-sheets/append-rows", tags=["Automation"])
+async def google_sheets_append_rows(request: GoogleSheetsAppendRowsModel):
+    """
+    Append multiple rows to Google Sheet
+    """
+    try:
+        if not integration_router.has_client("google_sheets"):
+            raise HTTPException(
+                status_code=404,
+                detail="Google Sheets integration not initialized. Please setup first."
+            )
+        
+        client = integration_router.get_client("google_sheets")
+        client.append_rows(request.rows_data)
+        
+        return {
+            "status": "success",
+            "message": f"{len(request.rows_data)} rows appended successfully",
+            "rows_count": len(request.rows_data)
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/google-sheets/update-cell", tags=["Automation"])
+async def google_sheets_update_cell(request: GoogleSheetsUpdateCellModel):
+    """
+    Update a specific cell in Google Sheet
+    """
+    try:
+        if not integration_router.has_client("google_sheets"):
+            raise HTTPException(
+                status_code=404,
+                detail="Google Sheets integration not initialized. Please setup first."
+            )
+        
+        client = integration_router.get_client("google_sheets")
+        client.update_cell(request.row, request.col, request.value)
+        
+        return {
+            "status": "success",
+            "message": f"Cell ({request.row}, {request.col}) updated successfully",
+            "value": request.value
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/google-sheets/get-all-records", tags=["Automation"])
+async def google_sheets_get_all_records():
+    """
+    Get all records from Google Sheet as list of dictionaries
+    """
+    try:
+        if not integration_router.has_client("google_sheets"):
+            raise HTTPException(
+                status_code=404,
+                detail="Google Sheets integration not initialized. Please setup first."
+            )
+        
+        client = integration_router.get_client("google_sheets")
+        records = client.get_all_records()
+        
+        return {
+            "status": "success",
+            "count": len(records),
+            "data": records
         }
         
     except HTTPException:

@@ -163,20 +163,79 @@ async def root():
             },
             "Integration": {
                 "prefix": "/integration",
-                "endpoints": [
-                    "POST /integration/setup/{platform} - Setup integration (shopify, woocommerce, magento2, prestashop, qapla, vertical-booking, booking-expert, mcp, google-sheets)",
-                    "POST /integration/ecommerce/{integration_name}/execute - Execute e-commerce operations (products, orders)",
-                    "POST /integration/booking/{integration_name}/generate-link - Generate booking links",
-                    "POST /integration/mcp/request - Make HTTP request using MCP client",
-                    "GET /integration/registry/list-all - List all available integrations",
-                    "GET /integration/registry/by-category/{category} - List integrations by category",
-                    "GET /integration/registry/by-tag/{tag} - List integrations by tag",
-                    "GET /integration/registry/search - Search integrations",
-                    "GET /integration/status/initialized - List initialized integrations",
-                    "GET /integration/status/test-connections - Test all connections",
-                    "DELETE /integration/remove/{integration_name} - Remove integration",
-                    "DELETE /integration/remove-all - Remove all integrations"
-                ]
+                "description": "Third-party integrations for e-commerce, booking, and automation",
+                "categories": {
+                    "Setup": "POST /integration/setup/{platform} - Initialize integrations",
+                    "Shopify": [
+                        "GET /integration/shopify/products - Get all products",
+                        "GET /integration/shopify/products/{id} - Get product",
+                        "PUT /integration/shopify/products/{id} - Update product",
+                        "GET /integration/shopify/orders - Get all orders",
+                        "GET /integration/shopify/orders/{id} - Get order",
+                        "GET /integration/shopify/test-connection - Test connection"
+                    ],
+                    "WooCommerce": [
+                        "GET /integration/woocommerce/products - Get all products",
+                        "GET /integration/woocommerce/products/{id} - Get product",
+                        "PUT /integration/woocommerce/products/{id} - Update product",
+                        "GET /integration/woocommerce/orders - Get all orders",
+                        "GET /integration/woocommerce/orders/{id} - Get order",
+                        "GET /integration/woocommerce/test-connection - Test connection"
+                    ],
+                    "Magento2": [
+                        "GET /integration/magento2/products - Get all products",
+                        "GET /integration/magento2/products/{sku} - Get product by SKU",
+                        "PUT /integration/magento2/products/{sku} - Update product",
+                        "GET /integration/magento2/orders - Get all orders",
+                        "GET /integration/magento2/orders/{id} - Get order",
+                        "GET /integration/magento2/test-connection - Test connection"
+                    ],
+                    "PrestaShop": [
+                        "GET /integration/prestashop/products - Get all products",
+                        "GET /integration/prestashop/products/{id} - Get product",
+                        "GET /integration/prestashop/orders - Get all orders",
+                        "GET /integration/prestashop/orders/{id} - Get order",
+                        "GET /integration/prestashop/test-connection - Test connection"
+                    ],
+                    "Qapla": [
+                        "GET /integration/qapla/products - Get all products",
+                        "GET /integration/qapla/products/{id} - Get product",
+                        "GET /integration/qapla/orders - Get all orders",
+                        "GET /integration/qapla/orders/{id} - Get order",
+                        "GET /integration/qapla/test-connection - Test connection"
+                    ],
+                    "Vertical Booking": [
+                        "POST /integration/vertical-booking/generate-link - Generate booking link",
+                        "GET /integration/vertical-booking/test-connection - Test connection"
+                    ],
+                    "Booking Expert": [
+                        "POST /integration/booking-expert/generate-link - Generate booking link",
+                        "GET /integration/booking-expert/test-connection - Test connection"
+                    ],
+                    "MCP Microservice": [
+                        "POST /integration/mcp/request - Make HTTP request",
+                        "POST /integration/mcp/set-header - Set/update header",
+                        "DELETE /integration/mcp/remove-header/{key} - Remove header"
+                    ],
+                    "Google Sheets": [
+                        "POST /integration/google-sheets/append-row - Append single row",
+                        "POST /integration/google-sheets/append-rows - Append multiple rows",
+                        "POST /integration/google-sheets/update-cell - Update cell",
+                        "GET /integration/google-sheets/get-all-records - Get all records"
+                    ],
+                    "Registry": [
+                        "GET /integration/registry/list-all - List all integrations",
+                        "GET /integration/registry/by-category/{category} - Filter by category",
+                        "GET /integration/registry/by-tag/{tag} - Filter by tag",
+                        "GET /integration/registry/search?query= - Search integrations"
+                    ],
+                    "Management": [
+                        "GET /integration/status/initialized - List initialized integrations",
+                        "GET /integration/status/test-connections - Test all connections",
+                        "DELETE /integration/remove/{name} - Remove integration",
+                        "DELETE /integration/remove-all - Remove all integrations"
+                    ]
+                }
             }
         }
     }
