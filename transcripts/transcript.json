@@ -1,0 +1,33 @@
+{
+  "items": [
+    {
+      "id": "item_8d6f64915195",
+      "type": "message",
+      "role": "assistant",
+      "content": [
+        "Hello Amar! How can I assist you today with your cricket coaching needs?"
+      ],
+      "interrupted": false
+    },
+    {
+      "id": "item_7f23dce035ef",
+      "type": "message",
+      "role": "user",
+      "content": [
+        "Hello. How are you?"
+      ],
+      "interrupted": false,
+      "transcript_confidence": 1.0
+    },
+    {
+      "id": "item_43fa7fcf9c3b",
+      "type": "message",
+      "role": "user",
+      "content": [
+        "Logite"
+      ],
+      "interrupted": false,
+      "transcript_confidence": 0.54785156
+    }
+  ]
+}

@@ -576,7 +576,7 @@ async def entrypoint(ctx: agents.JobContext):
             logger.info("[OK] OpenAI TTS initialized as fallback")
 
         logger.info("Step 4: Creating AgentSession")
-        session = AgentSession(stt=stt_instance, llm=llm_instance, tts=tts_instance)
+        session = AgentSession(vad=silero.VAD.load(),stt=stt_instance, llm=llm_instance, tts=tts_instance)
         logger.info("[OK] All session components initialized")
     except Exception as e:
         logger.error(f"[ERROR] Failed initializing session components: {e}", exc_info=True)
