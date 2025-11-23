@@ -24,7 +24,7 @@ langchain==1.0.7
 langchain-openai==1.0.3
 langchain-google-genai==2.0.7
 langchain-community==0.4.1
-langchain-core==1.0.5
+langchain-core
 langchain-classic==1.0.0
 langchain-text-splitters==1.0.0
 langgraph==1.0.3
