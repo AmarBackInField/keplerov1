@@ -533,19 +533,32 @@ async def setup_sip_trunk(request: CreateSIPTrunkRequest):
         log_info(f"--------------------------------------")
         log_info(f"LiveKit Trunk:   {livekit_trunk_id}")
         log_info(f"--------------------------------------")
+        log_info(f"Termination URI: {twilio_data.get('termination_uri', 'N/A')}")
+        log_info(f"  (Use this in LiveKit configuration)")
+        log_info(f"--------------------------------------")
         log_info(f"Credentials:")
         log_info(f"  └─ List:       {twilio_data['credential_list_name']}")
         log_info(f"  └─ List SID:   {twilio_data['credential_list_sid']}")
         log_info(f"  └─ Username:   {twilio_data['username']}")
+        log_info(f"--------------------------------------")
+        log_info(f"IP Access Control:")
+        log_info(f"  └─ IP ACL SID: {twilio_data.get('ip_acl_sid', 'N/A')}")
+        log_info(f"--------------------------------------")
+        log_info(f"Origination URI: {twilio_data.get('origination_uri', 'N/A')}")
+        log_info(f"  └─ URI SID:    {twilio_data.get('origination_uri_sid', 'N/A')}")
         log_info(f"======================================")
         
         return CreateSIPTrunkResponse(
             status="success",
-            message=f"SIP trunk '{request.label}' created successfully. Twilio: {twilio_data['trunk_name']}, LiveKit: {livekit_trunk_id}",
+            message=f"SIP trunk '{request.label}' created successfully. Twilio: {twilio_data['trunk_name']}, LiveKit: {livekit_trunk_id}. Termination URI: {twilio_data.get('termination_uri')}",
             twilio_trunk_sid=twilio_data["trunk_sid"],
             livekit_trunk_id=livekit_trunk_id,
+            termination_uri=twilio_data.get("termination_uri", ""),
             credential_list_sid=twilio_data["credential_list_sid"],
-            username=twilio_data["username"]
+            ip_acl_sid=twilio_data.get("ip_acl_sid", ""),
+            username=twilio_data["username"],
+            origination_uri=twilio_data.get("origination_uri"),
+            origination_uri_sid=twilio_data.get("origination_uri_sid")
         )
         
     except Exception as e:

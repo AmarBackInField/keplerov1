@@ -249,8 +249,12 @@ class CreateSIPTrunkResponse(BaseModel):
     message: str
     twilio_trunk_sid: str
     livekit_trunk_id: str
+    termination_uri: str  # The SIP URI LiveKit connects to (e.g., tkxxxx.pstn.twilio.com)
     credential_list_sid: str
+    ip_acl_sid: str
     username: str
+    origination_uri: Optional[str] = None
+    origination_uri_sid: Optional[str] = None
 
 
 class CreateLiveKitTrunkRequest(BaseModel):
