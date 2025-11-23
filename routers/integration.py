@@ -160,6 +160,14 @@ async def setup_shopify(config: ShopifyConfigModel):
             admin_api_key=config.admin_api_key,
             api_version=config.api_version
         )
+        
+        # Test connection before registering
+        if not client.test_connection():
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid Shopify credentials. Failed to authenticate with the provided shop_url and admin_api_key."
+            )
+        
         integration_router.register_client("shopify", client)
         
         return {
@@ -169,6 +177,8 @@ async def setup_shopify(config: ShopifyConfigModel):
             "category": "ecommerce",
             "tags": ["products", "orders", "rest_api"]
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -187,6 +197,14 @@ async def setup_woocommerce(config: WooCommerceConfigModel):
             consumer_secret=config.consumer_secret,
             api_version=config.api_version
         )
+        
+        # Test connection before registering
+        if not client.test_connection():
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid WooCommerce credentials. Failed to authenticate with the provided store_url and API keys."
+            )
+        
         integration_router.register_client("woocommerce", client)
         
         return {
@@ -196,6 +214,8 @@ async def setup_woocommerce(config: WooCommerceConfigModel):
             "category": "ecommerce",
             "tags": ["products", "orders", "rest_api"]
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -216,6 +236,14 @@ async def setup_magento2(config: Magento2ConfigModel):
             access_token_secret=config.access_token_secret,
             api_version=config.api_version
         )
+        
+        # Test connection before registering
+        if not client.test_connection():
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid Magento2 credentials. Failed to authenticate with the provided OAuth tokens."
+            )
+        
         integration_router.register_client("magento2", client)
         
         return {
@@ -225,6 +253,8 @@ async def setup_magento2(config: Magento2ConfigModel):
             "category": "ecommerce",
             "tags": ["products", "orders", "rest_api", "oauth"]
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -242,6 +272,14 @@ async def setup_prestashop(config: PrestashopConfigModel):
             api_key=config.api_key,
             api_version=config.api_version
         )
+        
+        # Test connection before registering
+        if not client.test_connection():
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid Prestashop credentials. Failed to authenticate with the provided store_url and api_key."
+            )
+        
         integration_router.register_client("prestashop", client)
         
         return {
@@ -251,6 +289,8 @@ async def setup_prestashop(config: PrestashopConfigModel):
             "category": "ecommerce",
             "tags": ["products", "orders", "rest_api"]
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -267,6 +307,14 @@ async def setup_qapla(config: QaplaConfigModel):
             api_key=config.api_key,
             base_url=config.base_url
         )
+        
+        # Test connection before registering
+        if not client.test_connection():
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid Qapla credentials. Failed to authenticate with the provided api_key."
+            )
+        
         integration_router.register_client("qapla", client)
         
         return {
@@ -276,6 +324,8 @@ async def setup_qapla(config: QaplaConfigModel):
             "category": "shipping",
             "tags": ["orders", "products", "rest_api"]
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -294,6 +344,14 @@ async def setup_vertical_booking(config: VerticalBookingConfigModel):
             dc=config.dc,
             base_url=config.base_url
         )
+        
+        # Test connection before registering
+        if not client.test_connection():
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid Vertical Booking credentials. Failed to validate the provided hotel_id and configuration."
+            )
+        
         integration_router.register_client("vertical_booking", client)
         
         return {
@@ -303,6 +361,8 @@ async def setup_vertical_booking(config: VerticalBookingConfigModel):
             "category": "booking",
             "tags": ["booking_links"]
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -322,6 +382,14 @@ async def setup_booking_expert(config: BookingExpertConfigModel):
             teen_type_id=config.teen_type_id,
             child_type_id=config.child_type_id
         )
+        
+        # Test connection before registering
+        if not client.test_connection():
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid Booking Expert credentials. Failed to validate the provided engine_url and configuration."
+            )
+        
         integration_router.register_client("booking_expert", client)
         
         return {
@@ -331,6 +399,8 @@ async def setup_booking_expert(config: BookingExpertConfigModel):
             "category": "booking",
             "tags": ["booking_links"]
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
