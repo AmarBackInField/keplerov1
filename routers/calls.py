@@ -490,6 +490,11 @@ async def setup_sip_trunk(request: CreateSIPTrunkRequest):
             - username: SIP username for authentication
     """
     try:
+        log_info(f"======================================")
+        log_info(f"  SIP TRUNK SETUP STARTED")
+        log_info(f"======================================")
+        log_info(request)
+        log_info(f"======================================")
         log_info(f"Starting SIP trunk setup with label: '{request.label}'")
         log_info(f"Phone number: {request.phone_number}")
         
