@@ -282,6 +282,96 @@ async def create_livekit_trunk_from_address(
     return trunk.sip_trunk_id
 
 
+async def create_generic_livekit_trunk(
+    sip_address: str,
+    username: str,
+    password: str,
+    phone_number: str,
+    media_encryption: str ="disabled",
+    trunk_name: str = "Generic-SIP-Trunk",
+    provider_name: str = "generic",
+    transport: str = "udp",
+    port: int = 5060,
+
+):
+    """
+    Create a LiveKit SIP trunk from any generic SIP provider (FibraPro, VoIP.ms, etc.).
+    Works with any standard SIP provider that supports username/password authentication.
+    
+    Args:
+        sip_address: SIP domain/registrar (e.g., yes-group-2.fibrapro.it)
+        username: SIP username for authentication
+        password: SIP password for authentication
+        phone_number: Phone number associated with the trunk (with country code, e.g., +390110722580)
+        trunk_name: Name for the LiveKit trunk
+        provider_name: Name of the SIP provider (for metadata/tracking)
+        transport: SIP transport protocol ("udp", "tcp", or "tls")
+        port: SIP port (default 5060 for UDP/TCP, 5061 for TLS)
+    
+    Returns:
+        str: LiveKit trunk ID
+    """
+    print(f"Creating LiveKit SIP Trunk for {provider_name} provider...")
+    print(f"  SIP Address: {sip_address}")
+    print(f"  Username: {username}")
+    print(f"  Phone Number: {phone_number}")
+    print(f"  Transport: {transport.upper()}")
+    print(f"  Port: {port}")
+    
+    lk = api.LiveKitAPI(
+        url=LIVEKIT_URL,
+        api_key=LIVEKIT_API_KEY,
+        api_secret=LIVEKIT_API_SECRET
+    )
+    
+    from livekit.protocol import sip
+    
+    # Create the trunk info object
+    trunk_info = sip.SIPOutboundTrunkInfo()
+    trunk_info.name = trunk_name
+    trunk_info.metadata = f'{{"provider":"{provider_name}","address":"{sip_address}","transport":"{transport}"}}'
+    
+    # Set the SIP address (domain:port or just domain)
+    if ":" not in sip_address and port != 5060:
+        trunk_info.address = f"{sip_address}:{port}"
+    else:
+        trunk_info.address = sip_address
+    
+    # Set authentication
+    trunk_info.auth_username = username
+    trunk_info.auth_password = password
+    
+    # Add phone number(s) to the trunk
+    trunk_info.numbers.append(phone_number)
+    
+    # Set transport protocol
+    if transport.lower() == "tcp":
+        trunk_info.transport = sip.SIPTransport.SIP_TRANSPORT_TCP
+    elif transport.lower() == "tls":
+        trunk_info.transport = sip.SIPTransport.SIP_TRANSPORT_TLS
+    else:  # default to UDP
+        trunk_info.transport = sip.SIPTransport.SIP_TRANSPORT_UDP
+    
+    # Create the request with the trunk info
+    request = sip.CreateSIPOutboundTrunkRequest()
+    request.trunk.CopyFrom(trunk_info)
+    
+    # Create the trunk
+    try:
+        trunk = await lk.sip.create_outbound_trunk(request)
+        await lk.aclose()
+        
+        print(f"✔ LiveKit SIP Trunk Created: {trunk.sip_trunk_id}")
+        print(f"   Provider: {provider_name}")
+        print(f"   SIP Address: {trunk_info.address}")
+        print(f"   Transport: {transport.upper()}")
+        print(f"   Phone Numbers: {', '.join(trunk_info.numbers)}")
+        return trunk.sip_trunk_id
+    except Exception as e:
+        await lk.aclose()
+        raise Exception(f"Failed to create LiveKit trunk: {str(e)}")
+
+
 async def main():
     print("==== TWILIO CREDENTIAL INPUT ====")
     account_sid = input("Enter Twilio ACCOUNT SID: ").strip()

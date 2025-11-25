@@ -275,6 +275,29 @@ class CreateLiveKitTrunkResponse(BaseModel):
     phone_number: str
 
 
+class CreateGenericSIPTrunkRequest(BaseModel):
+    """Request model for creating LiveKit SIP trunk from any generic SIP provider."""
+    label: str
+    phone_number: str  # e.g., +390110722580
+    sip_address: str  # e.g., yes-group-2.fibrapro.it
+    username: str
+    password: str
+    provider_name: Optional[str] = "generic"  # e.g., "fibrapro", "voip.ms", etc.
+    transport: Optional[str] = "udp"  # "udp", "tcp", or "tls"
+    port: Optional[int] = 5060  # Default SIP port
+
+
+class CreateGenericSIPTrunkResponse(BaseModel):
+    """Response model for generic SIP trunk creation."""
+    status: str
+    message: str
+    livekit_trunk_id: str
+    provider_name: str
+    sip_address: str
+    phone_number: str
+    transport: str
+
+
 class CreateInboundTrunkRequest(BaseModel):
     """Request model for creating inbound SIP trunk."""
     name: str
@@ -292,12 +315,79 @@ class CreateInboundTrunkResponse(BaseModel):
     phone_numbers: list[str]
 
 
-class CreateDispatchRuleRequest(BaseModel):
-    """Request model for creating dispatch rule."""
+class AgentConfig(BaseModel):
+    """Agent configuration for dispatch rule."""
+    agent_name: Optional[str] = None  # e.g., "inbound-agent" (snake_case)
+    agentName: Optional[str] = None  # e.g., "inbound-agent" (camelCase)
+    metadata: Optional[str] = None  # Optional metadata for the agent
+    
+    def get_agent_name(self) -> str:
+        """Return agent name, supporting both camelCase and snake_case."""
+        return self.agent_name or self.agentName or ""
+
+
+class RoomConfig(BaseModel):
+    """Room configuration for dispatch rule."""
+    agents: Optional[list[AgentConfig]] = None  # List of agents to dispatch
+
+
+class DispatchRuleIndividual(BaseModel):
+    """Individual dispatch rule configuration for dynamic room creation."""
+    room_prefix: Optional[str] = None  # snake_case
+    roomPrefix: Optional[str] = None  # camelCase
+    
+    def get_room_prefix(self) -> Optional[str]:
+        """Return room prefix, supporting both camelCase and snake_case."""
+        return self.room_prefix or self.roomPrefix
+
+
+class DispatchRuleDirect(BaseModel):
+    """Direct dispatch rule configuration for fixed room name."""
+    room_name: Optional[str] = None  # snake_case
+    roomName: Optional[str] = None  # camelCase
+    
+    def get_room_name(self) -> Optional[str]:
+        """Return room name, supporting both camelCase and snake_case."""
+        return self.room_name or self.roomName
+
+
+class DispatchRuleUnion(BaseModel):
+    """Union type for dispatch rules."""
+    dispatchRuleIndividual: Optional[DispatchRuleIndividual] = None
+    dispatchRuleDirect: Optional[DispatchRuleDirect] = None
+    dispatch_rule_individual: Optional[DispatchRuleIndividual] = None
+    dispatch_rule_direct: Optional[DispatchRuleDirect] = None
+    
+    def get_individual_rule(self) -> Optional[DispatchRuleIndividual]:
+        """Get individual rule, supporting both camelCase and snake_case."""
+        return self.dispatchRuleIndividual or self.dispatch_rule_individual
+    
+    def get_direct_rule(self) -> Optional[DispatchRuleDirect]:
+        """Get direct rule, supporting both camelCase and snake_case."""
+        return self.dispatchRuleDirect or self.dispatch_rule_direct
+
+
+class DispatchRuleConfig(BaseModel):
+    """Configuration for dispatch rule."""
+    rule: DispatchRuleUnion
     name: str
-    trunk_ids: list[str]  # List of trunk IDs to attach
-    room_name: str  # Room name to dispatch to
-    room_prefix: Optional[str] = None  # Optional room prefix for dynamic rooms
+    trunk_ids: Optional[list[str]] = None  # snake_case
+    trunkIds: Optional[list[str]] = None  # camelCase
+    room_config: Optional[RoomConfig] = None  # snake_case
+    roomConfig: Optional[RoomConfig] = None  # camelCase
+    
+    def get_trunk_ids(self) -> list[str]:
+        """Return trunk IDs, supporting both camelCase and snake_case."""
+        return self.trunk_ids or self.trunkIds or []
+    
+    def get_room_config(self) -> Optional[RoomConfig]:
+        """Return room config, supporting both camelCase and snake_case."""
+        return self.room_config or self.roomConfig
+
+
+class CreateDispatchRuleRequest(BaseModel):
+    """Request model for creating dispatch rule with nested structure."""
+    dispatch_rule: DispatchRuleConfig
 
 
 class CreateDispatchRuleResponse(BaseModel):

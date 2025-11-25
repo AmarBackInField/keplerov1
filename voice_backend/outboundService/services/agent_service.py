@@ -687,7 +687,10 @@ async def entrypoint(ctx: agents.JobContext):
     greetings = {
         "en": f"Hello {caller_name}, I'm your Assistant from Aistein.",
         "it": f"Ciao {caller_name}, sono il tuo Assistente di Aistein.",
-        "es": f"Hola {caller_name}, soy tu Asistente de Aistein."
+        "es": f"Hola {caller_name}, soy tu Asistente de Aistein.",
+        "ar": f"مرحبا {caller_name}، أنا مساعدك من Aistein.",
+        "tr": f"Merhaba {caller_name}, ben Aistein'dan Asistanınızım.",
+        "hi": f"नमस्ते {caller_name}, मैं Aistein से आपका सहायक हूँ।"
     }
     
     # Default to English if language not supported

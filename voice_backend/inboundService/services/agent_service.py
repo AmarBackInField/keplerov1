@@ -1,248 +1,197 @@
 import os
-import json
-import asyncio
 import logging
 import sys
-from datetime import datetime
 from livekit import api
 from livekit import agents
-from livekit.agents import AgentSession, Agent, RoomInputOptions
-from livekit.plugins import (
-    openai,
-    cartesia,
-    deepgram,
-    noise_cancellation,
-    silero,
-    google
-)
+from livekit.agents import AgentSession, Agent, RoomInputOptions, function_tool, RunContext, get_job_context
+from livekit.plugins import openai, deepgram, noise_cancellation, silero,elevenlabs
 from dotenv import load_dotenv
+
 load_dotenv()
 
-from common.config.settings import (
-    TTS_MODEL, TTS_VOICE, STT_MODEL, STT_LANGUAGE, LLM_MODEL, TRANSCRIPT_DIR
-)
+# ------------------------------------------------------------
+# Environment variables
+# ------------------------------------------------------------
+LIVEKIT_URL = os.getenv("LIVEKIT_URL")
+LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY")
+LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET")
 
-# Configure logging with more detail
+# Agent configuration
+AGENT_INSTRUCTIONS = os.getenv("You are a helpful voice AI assistant of Aistein .")
+TRANSFER_NUMBER = os.getenv("TRANSFER_NUMBER", "+919911062767")
+
+# ------------------------------------------------------------
+# Logging setup
+# ------------------------------------------------------------
 logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler('inbound_agent_debug.log')
+        logging.FileHandler("agent_debug.log")
     ]
 )
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("services.agent_service")
 
-# Log environment check at module load
 logger.info("=" * 60)
-logger.info("Inbound Agent Service Module Loading")
-logger.info(f"LIVEKIT_URL: {os.getenv('LIVEKIT_URL', 'NOT SET')}")
-logger.info(f"LIVEKIT_API_KEY: {'SET' if os.getenv('LIVEKIT_API_KEY') else 'NOT SET'}")
-logger.info(f"LIVEKIT_API_SECRET: {'SET' if os.getenv('LIVEKIT_API_SECRET') else 'NOT SET'}")
-logger.info(f"OPENAI_API_KEY: {'SET' if os.getenv('OPENAI_API_KEY') else 'NOT SET'}")
-logger.info(f"STT_MODEL: {STT_MODEL}")
-logger.info(f"LLM_MODEL: {LLM_MODEL}")
+logger.info("Inbound Agent Service Starting")
+logger.info(f"LIVEKIT_URL: {LIVEKIT_URL or 'NOT SET'}")
 logger.info("=" * 60)
 
+
+# ------------------------------------------------------------
+# Simple Assistant class
+# ------------------------------------------------------------
 class Assistant(Agent):
     def __init__(self, instructions: str = None) -> None:
         if instructions is None:
-            instructions = os.getenv("AGENT_INSTRUCTIONS", "You are a helpful voice AI assistant answering inbound calls.")
-        logger.info(f"Agent initialized with instructions: {instructions}")
+            instructions = AGENT_INSTRUCTIONS
+        logger.info(f"Agent initialized")
         super().__init__(instructions=instructions)
 
-async def hangup_call():
-    """Hang up the current call"""
-    from livekit.agents import get_job_context
-    ctx = get_job_context()
-    if ctx is None:
-        # Not running in a job context
-        return
-    
-    await ctx.api.room.delete_room(
-        api.DeleteRoomRequest(
-            room=ctx.room.name,
-        )
-    )
+    @function_tool
+    async def transfer_to_human(self, ctx: RunContext) -> str:
+        """Transfer active SIP caller to a human number."""
+        job_ctx = get_job_context()
+        if job_ctx is None:
+            logger.error("Job context not found")
+            return "error"
+        
+        # Format transfer number
+        transfer_to = TRANSFER_NUMBER if TRANSFER_NUMBER.startswith("tel:") else f"tel:{TRANSFER_NUMBER}"
+        logger.info(f"Transfer requested to: {transfer_to}")
 
-async def entrypoint(ctx: agents.JobContext):
-    """Main entrypoint for the inbound agent service"""
-    logger.info("=" * 60)
-    logger.info(f"INBOUND ENTRYPOINT CALLED - Room: {ctx.room.name}")
-    logger.info("=" * 60)
-    
-    # Read dynamic parameters from environment variables
-    agent_instructions = os.getenv("AGENT_INSTRUCTIONS", "You are a helpful voice AI assistant answering inbound calls.")
-    language = os.getenv("TTS_LANGUAGE", "en")
-    emotion = os.getenv("TTS_EMOTION", "Calm")
-    provider = os.getenv("LLM_PROVIDER", "openai").lower()
-    api_key = os.getenv("LLM_API_KEY")
-    
-    logger.info(f"Agent Instructions: {agent_instructions[:100]}...")
-    logger.info(f"LLM Provider: {provider}")
-    if api_key:
-        logger.info(f"Custom API Key: {'***' + api_key[-4:] if len(api_key) > 4 else '***'}")
-    
-    # Transcript cleanup function
-    async def cleanup_and_save():
+        # Find SIP participant
+        sip_participant = None
+        for participant in job_ctx.room.remote_participants.values():
+            if participant.identity == "sip-caller":
+                sip_participant = participant
+                break
+
+        if sip_participant is None:
+            logger.error("No SIP participant found to transfer")
+            return "error"
+
         try:
-            logger.info("Cleanup started...")
-            # Save transcript
-            os.makedirs(TRANSCRIPT_DIR, exist_ok=True)
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"{TRANSCRIPT_DIR}/inbound_transcript_{timestamp}.json"
-            
-            with open(filename, 'w') as f:
-                json.dump(session.history.to_dict(), f, indent=2)
-                
-            logger.info(f"Transcript for {ctx.room.name} saved to {filename}")
-                
+            await job_ctx.api.sip.transfer_sip_participant(
+                api.TransferSIPParticipantRequest(
+                    room_name=job_ctx.room.name,
+                    participant_identity=sip_participant.identity,
+                    transfer_to=transfer_to,
+                    play_dialtone=True
+                )
+            )
+            logger.info(f"Transferred participant to {transfer_to}")
+            return "transferred"
         except Exception as e:
-            logger.error(f"Error during cleanup: {e}", exc_info=True)
+            logger.error(f"Failed to transfer call: {e}", exc_info=True)
+            return "error"
 
-    logger.info("Adding shutdown callback...")
-    ctx.add_shutdown_callback(cleanup_and_save)
-    logger.info("✓ Shutdown callback added")
-    
-    # Connect to the room
-    logger.info("Connecting to room...")
-    await ctx.connect()
-    logger.info("✓ Connected to room successfully")
+    @function_tool
+    async def end_call(self, ctx: RunContext) -> str:
+        """End call gracefully."""
+        job_ctx = get_job_context()
+        if job_ctx is None:
+            logger.error("Failed to get job context")
+            return "error"
 
-    # Initialize session components with error handling
+        try:
+            await job_ctx.api.room.delete_room(api.DeleteRoomRequest(room=job_ctx.room.name))
+            logger.info(f"Successfully ended call for room {job_ctx.room.name}")
+            return "ended"
+        except Exception as e:
+            logger.error(f"Failed to end call: {e}", exc_info=True)
+            return "error"
+
+
+# ------------------------------------------------------------
+# Simple Agent entrypoint
+# ------------------------------------------------------------
+async def entrypoint(ctx: agents.JobContext):
+    """Simple entrypoint for inbound voice agent."""
+    logger.info("=" * 60)
+    logger.info(f"Inbound Call - Room: {ctx.room.name}")
+    logger.info("=" * 60)
+
+    # Connect to room
     try:
-        logger.info("Initializing session components...")
+        logger.info("Connecting to room...")
+        await ctx.connect()
+        logger.info("Connected to room")
+    except Exception as e:
+        logger.error(f"Failed to connect: {e}", exc_info=True)
+        raise
+
+    # Initialize components
+    try:
+        logger.info("Initializing STT, LLM, and TTS...")
         
-        logger.info("Step 1: Initializing STT (Deepgram)...")
-        stt_instance = deepgram.STT(model=STT_MODEL, language=STT_LANGUAGE)
-        logger.info("✓ STT initialized successfully")
+        stt_instance = deepgram.STT(model="nova-2-general", language="en")
+        llm_instance = openai.LLM(model="gpt-4o-mini")
+        tts_instance = elevenlabs.TTS(
+                voice_id="21m00Tcm4TlvDq8ikWAM",
+                language="en",
+                model="eleven_flash_v2_5"
+            )
         
-        logger.info(f"Step 2: Initializing LLM ({provider})...")
-        
-        # Initialize LLM based on provider
-        if provider == "gemini":
-            if api_key:
-                logger.info("Using Gemini with custom API key")
-                os.environ["GOOGLE_API_KEY"] = api_key
-                llm_instance = google.LLM(model="gemini-2.0-flash-exp")
-                logger.info("✓ Gemini LLM initialized with custom API key")
-            else:
-                logger.warning("Gemini provider selected but no API key provided, falling back to OpenAI")
-                llm_instance = openai.LLM(model=LLM_MODEL)
-                logger.info("✓ OpenAI LLM initialized (fallback)")
-        else:  # default to OpenAI
-            if api_key:
-                logger.info("Using OpenAI with custom API key")
-                os.environ["OPENAI_API_KEY"] = api_key
-                llm_instance = openai.LLM(model="gpt-4o-mini")
-                logger.info("✓ OpenAI LLM initialized with custom API key")
-            else:
-                logger.info("Using default OpenAI configuration")
-                llm_instance = openai.LLM(model=LLM_MODEL)
-                logger.info("✓ OpenAI LLM initialized with default config")
-        
-        logger.info("Step 3: Initializing TTS (Cartesia)...")
-        tts_instance = cartesia.TTS(
-            model=TTS_MODEL, 
-            emotion=emotion,
-            language=language,
-        )
-        logger.info("✓ TTS initialized successfully")
-        
-        logger.info("Step 4: Creating AgentSession...")
+        logger.info("Creating session...")
         session = AgentSession(
+            vad=silero.VAD.load(),
             stt=stt_instance,
             llm=llm_instance,
-            tts=tts_instance,
+            tts=tts_instance
         )
-        logger.info("✓ Session components initialized successfully")
-        
+        logger.info("Session components initialized")
     except Exception as e:
-        logger.error(f"✗ Error initializing session: {e}", exc_info=True)
+        logger.error(f"Failed to initialize: {e}", exc_info=True)
         raise
 
-    # Track SIP participant
-    sip_participant_identity = "sip-caller"
-    greeting_sent = False
+    # Create assistant and start session
+    assistant = Assistant()
+    room_options = RoomInputOptions(noise_cancellation=noise_cancellation.BVC())
 
-    # Handle participant connection
-    async def handle_participant_connected(participant):
-        nonlocal greeting_sent
-        logger.info(f"Participant connected: {participant.identity}")
-        
-        # Send greeting only once and only for actual participants (not the agent)
-        if not greeting_sent and participant.identity != "agent":
-            greeting_sent = True
-            await asyncio.sleep(2)  # Wait for connection to stabilize
-            
-            try:
-                logger.info("Sending initial greeting for inbound call...")
-                # Build greeting instruction
-                greeting_instruction = "Greet the caller warmly, introduce yourself as an assistant from Island AI, and ask how you can help them today."
-                
-                await session.generate_reply(instructions=greeting_instruction)
-                logger.info("Initial greeting sent successfully")
-            except Exception as e:
-                logger.error(f"Error sending greeting: {e}")
-
-    # Handle participant disconnection
-    async def handle_disconnect(participant):
-        logger.info(f"Participant disconnected: {participant.identity}")
-        if participant.identity == sip_participant_identity:
-            logger.info(f"SIP caller '{participant.identity}' disconnected — session will end")
-            # Let the session handle cleanup naturally
-
-    # Register event handlers
-    def on_participant_connected(participant):
-        asyncio.create_task(handle_participant_connected(participant))
-    
-    def on_disconnect(participant):
-        asyncio.create_task(handle_disconnect(participant))
-
-    ctx.room.on("participant_connected", on_participant_connected)
-    ctx.room.on("participant_disconnected", on_disconnect)
-
-    # Start the agent session
     try:
         logger.info("Starting agent session...")
-        logger.info("Creating Assistant instance...")
-        
-        # Use instruction from environment variable
-        assistant = Assistant(instructions=agent_instructions)
-        logger.info("✓ Assistant instance created")
-        logger.info(f"Using instructions: {agent_instructions[:100]}...")
-        
-        logger.info("Creating RoomInputOptions with BVC noise cancellation...")
-        room_options = RoomInputOptions(
-            noise_cancellation=noise_cancellation.BVC(),
-        )
-        logger.info("✓ RoomInputOptions created")
-        
-        logger.info("Calling session.start()...")
-        await session.start(
-            room=ctx.room,
-            agent=assistant,
-            room_input_options=room_options,
-        )
-        logger.info("✓ Agent session started successfully")
-        
-        # Keep the session alive
-        logger.info("Session running, keeping alive...")
-        while True:
-            await asyncio.sleep(1)
-            
+        await session.start(room=ctx.room, agent=assistant, room_input_options=room_options)
+        logger.info("Agent session started")
     except Exception as e:
-        logger.error(f"✗ Error in agent session: {e}", exc_info=True)
+        logger.error(f"Failed to start session: {e}", exc_info=True)
         raise
 
-def run_agent():
-    """Run the inbound agent with CLI interface"""
-    logger.info("=" * 60)
-    logger.info("RUN_AGENT CALLED - Starting LiveKit Inbound Agent CLI")
-    logger.info("=" * 60)
+    # Send greeting
     try:
-        agents.cli.run_app(agents.WorkerOptions(entrypoint_fnc=entrypoint))
+        await session.generate_reply(instructions="Hello, I'm your AI assistant. How can I help you today?")
+        logger.info("Greeting sent")
     except Exception as e:
-        logger.error(f"✗ Fatal error in run_agent: {e}", exc_info=True)
-        raise
+        logger.error(f"Failed to send greeting: {e}", exc_info=True)
 
+    # Wait for session to end
+    logger.info("Session running...")
+    logger.info("=" * 60)
+
+
+# ------------------------------------------------------------
+# CLI entrypoint
+# ------------------------------------------------------------
+def run_agent():
+    """Run the inbound agent worker."""
+    logger.info("=" * 60)
+    logger.info("Starting Inbound Agent")
+    logger.info("=" * 60)
+    
+    try:
+        agent_name = os.getenv("AGENT_NAME", "inbound-agent-1")
+        logger.info(f"Agent name: {agent_name}")
+        
+        worker_options = agents.WorkerOptions(
+            entrypoint_fnc=entrypoint,
+            agent_name=agent_name,
+        )
+        
+        agents.cli.run_app(worker_options)
+        logger.info("Agent exited")
+    except KeyboardInterrupt:
+        logger.info("Agent stopped")
+    except Exception as e:
+        logger.error(f"Fatal error: {e}", exc_info=True)
+        raise

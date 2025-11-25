@@ -21,6 +21,8 @@ from model import (
     CreateSIPTrunkResponse, 
     CreateLiveKitTrunkRequest, 
     CreateLiveKitTrunkResponse,
+    CreateGenericSIPTrunkRequest,
+    CreateGenericSIPTrunkResponse,
     CreateInboundTrunkRequest,
     CreateInboundTrunkResponse,
     CreateDispatchRuleRequest,
@@ -201,188 +203,6 @@ async def outbound_call(request: OutboundCallRequest):
         log_exception(f"Error initiating outbound call: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Outbound call error: {str(e)}")
 
-
-@router.post("/outbound-with-escalation", response_model=StatusResponse)
-async def outbound_call_with_escalation(request: OutboundCallRequest):
-    """
-    Initiate an outbound call with AI agent that can escalate to a human supervisor.
-    
-    This endpoint creates a LiveKit room and calls the customer. The outbound.py agent worker
-    (which must be running) will automatically join the room and handle the conversation.
-    
-    Prerequisites:
-    - outbound.py agent worker must be running (python outbound.py)
-    - Agent worker uses the "sip-inbound" agent name to dispatch
-    
-    Flow (as implemented in outbound.py):
-    1. Room is created
-    2. Customer joins room via SIP call
-    3. Agent worker (outbound.py) automatically dispatches to the room
-    4. SupportAgent starts conversation with customer
-    5. If customer requests escalation, agent calls supervisor
-    6. Agent provides conversation summary to supervisor
-    7. Supervisor confirms, calls are merged, agent disconnects
-    
-    Args:
-        request: OutboundCallRequest containing:
-            - phone_number: Customer phone number with country code (e.g., +1234567890)
-            - name: Customer's name for personalization (optional)
-            - dynamic_instruction: Custom instructions for the AI agent (optional)
-            - language: TTS language code (default: "en")
-            - voice_id: ElevenLabs voice ID (default: Rachel)
-            - sip_trunk_id: SIP trunk ID (optional, uses env variable if not provided)
-            - transfer_to: Phone number to transfer to (optional)
-            - escalation_condition: Condition when to escalate/transfer (optional)
-            - provider: LLM provider ("openai" or "gemini", default: "openai")
-            - api_key: Custom API key for the provider (optional)
-        
-    Returns:
-        StatusResponse with call initiation status
-    
-    Environment variables required:
-        - LIVEKIT_API_KEY: Your LiveKit API key
-        - LIVEKIT_API_SECRET: Your LiveKit API secret
-        - LIVEKIT_URL: Your LiveKit server URL
-        - LIVEKIT_SIP_OUTBOUND_TRUNK: Your SIP trunk ID (e.g., ST_vEtSehKXAp4d)
-        - LIVEKIT_SUPERVISOR_PHONE_NUMBER: Supervisor's phone number (e.g., +919911062767)
-    """
-    try:
-        log_info(f"Outbound call with escalation request to: '{request.phone_number}'")
-        
-        # Format and validate phone number
-        formatted_number = format_phone_number(request.phone_number)
-        
-        if not validate_phone_number(formatted_number):
-            log_error(f"Invalid phone number format: '{request.phone_number}'")
-            raise HTTPException(
-                status_code=400,
-                detail="Invalid phone number format. Phone number must start with '+' followed by country code and number (e.g., +1234567890)"
-            )
-        
-        # Get LiveKit credentials from environment
-        livekit_url = os.getenv("LIVEKIT_URL")
-        livekit_api_key = os.getenv("LIVEKIT_API_KEY")
-        livekit_api_secret = os.getenv("LIVEKIT_API_SECRET")
-        sip_trunk_id = os.getenv("LIVEKIT_SIP_OUTBOUND_TRUNK")
-        supervisor_phone = os.getenv("LIVEKIT_SUPERVISOR_PHONE_NUMBER")
-        
-        # Validate required credentials
-        if not all([livekit_url, livekit_api_key, livekit_api_secret, sip_trunk_id]):
-            log_error("Missing LiveKit credentials in environment variables")
-            raise HTTPException(
-                status_code=500,
-                detail="LiveKit credentials not configured. Please set LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, and LIVEKIT_SIP_OUTBOUND_TRUNK"
-            )
-        
-        if not supervisor_phone:
-            log_warning("LIVEKIT_SUPERVISOR_PHONE_NUMBER not set - escalation will fail if requested")
-        
-        # Update config.json with dynamic parameters for the agent
-        # The agent worker will read these values from config.json
-        log_info("Updating config.json with dynamic parameters for agent...")
-        await update_dynamic_config(
-            dynamic_instruction=request.dynamic_instruction,
-            caller_name=request.name,
-            language=request.language,
-            voice_id=request.voice_id,
-            transfer_to=request.transfer_to,
-            escalation_condition=request.escalation_condition,
-            provider=request.provider,
-            api_key=request.api_key
-        )
-        log_info("✓ config.json updated successfully")
-        
-        # Create unique room name for this call
-        # Pattern matches what outbound.py expects
-        import uuid
-        import time
-        room_name = f"outbound-escalation-{int(time.time())}-{uuid.uuid4().hex[:8]}"
-        log_info(f"Creating room: {room_name}")
-        
-        # Initialize LiveKit API
-        lkapi = api.LiveKitAPI(
-            url=livekit_url,
-            api_key=livekit_api_key,
-            api_secret=livekit_api_secret
-        )
-        
-        try:
-            # Step 1: Create the room with metadata for agent dispatch
-            # Setting metadata to signal the agent worker to join
-            await lkapi.room.create_room(
-                api.CreateRoomRequest(
-                    name=room_name,
-                    metadata=json.dumps({"agent_name": "sip-inbound"})  # Signal which agent should join
-                )
-            )
-            log_info(f"✓ Room created: {room_name}")
-            
-            # Step 2: Agent will auto-dispatch to the room
-            # The outbound.py worker is configured to automatically join any room
-            log_info(f"Agent worker will auto-dispatch when participant joins...")
-            
-            # Step 3: Initiate SIP call to customer
-            # Customer joins the room as "customer-sip" participant
-            # This triggers the outbound.py entrypoint which:
-            # - Creates AgentSession with SupportAgent
-            # - Sets up SessionManager with escalation capabilities  
-            # - Starts the agent conversation
-            log_info(f"Initiating SIP call to customer: {formatted_number}")
-            log_info(f"  Customer will join room as participant")
-            log_info(f"  Agent will handle conversation with escalation support")
-            
-            participant = await lkapi.sip.create_sip_participant(
-                api.CreateSIPParticipantRequest(
-                    sip_trunk_id=sip_trunk_id,
-                    sip_call_to=formatted_number,
-                    room_name=room_name,
-                    participant_identity="customer-sip",
-                    participant_name=request.name or "Customer",
-                    krisp_enabled=True,  # Enable noise cancellation as in outbound.py
-                    wait_until_answered=True
-                )
-            )
-            
-            log_info(f"✓ Call initiated successfully")
-            log_info(f"  - Room: {room_name}")
-            log_info(f"  - Customer Participant ID: {participant.participant_id}")
-            log_info(f"  - SIP Call ID: {participant.sip_call_id}")
-            log_info(f"  - Agent dispatched and ready to handle conversation")
-            log_info(f"  - Escalation available to: {supervisor_phone or 'Not configured'}")
-            
-            return StatusResponse(
-                status="success",
-                message=f"Outbound call with escalation initiated to {formatted_number}" + (f" for {request.name}" if request.name else ""),
-                details={
-                    "phone_number": formatted_number,
-                    "original_input": request.phone_number,
-                    "name": request.name,
-                    "room_name": room_name,
-                    "dispatch_method": "Auto-dispatch (agent joins automatically)",
-                    "participant_id": participant.participant_id,
-                    "sip_call_id": participant.sip_call_id,
-                    "has_dynamic_instruction": bool(request.dynamic_instruction),
-                    "language": request.language,
-                    "voice_id": request.voice_id,
-                    "sip_trunk_id": request.sip_trunk_id,
-                    "transfer_to": request.transfer_to,
-                    "escalation_condition": request.escalation_condition,
-                    "provider": request.provider,
-                    "has_custom_api_key": bool(request.api_key),
-                    "escalation_enabled": bool(supervisor_phone),
-                    "supervisor_phone": supervisor_phone if supervisor_phone else "Not configured",
-                    "flow": "Room created → Customer joins → Agent auto-dispatches → Conversation starts → Escalation available"
-                }
-            )
-            
-        finally:
-            await lkapi.aclose()
-    
-    except HTTPException:
-        raise
-    except Exception as e:
-        log_exception(f"Error initiating outbound call with escalation: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Outbound call error: {str(e)}")
 
 
 @router.post("/setup-sip-trunk", response_model=CreateSIPTrunkResponse)
@@ -587,6 +407,137 @@ async def create_livekit_trunk_endpoint(request: CreateLiveKitTrunkRequest):
         )
 
 
+@router.post("/create-generic-sip-trunk", response_model=CreateGenericSIPTrunkResponse)
+async def create_generic_sip_trunk_endpoint(request: CreateGenericSIPTrunkRequest):
+    """
+    Create a LiveKit SIP trunk from ANY generic SIP provider (FibraPro, VoIP.ms, etc.).
+    
+    This endpoint works with any standard SIP provider that supports username/password 
+    authentication. Unlike the Twilio-specific endpoint, this supports various transport 
+    protocols and custom ports.
+    
+    Args:
+        request: CreateGenericSIPTrunkRequest containing:
+            - label: Friendly name/label for the trunk
+            - phone_number: Phone number with country code (e.g., +390110722580)
+            - sip_address: SIP domain/registrar (e.g., yes-group-2.fibrapro.it)
+            - username: SIP username for authentication
+            - password: SIP password for authentication
+            - provider_name: Name of provider (e.g., "fibrapro", "voipms") - optional
+            - transport: Protocol - "udp", "tcp", or "tls" (default: "udp")
+            - port: SIP port (default: 5060)
+    
+    Returns:
+        CreateGenericSIPTrunkResponse with:
+            - livekit_trunk_id: Created LiveKit trunk ID
+            - provider_name: The provider name
+            - sip_address: The SIP address used
+            - phone_number: The phone number associated
+            - transport: Transport protocol used
+    
+    Example - FibraPro:
+        POST /calls/create-generic-sip-trunk
+        {
+            "label": "FibraPro Italy",
+            "phone_number": "+390110722580",
+            "sip_address": "yes-group-2.fibrapro.it",
+            "username": "abc",
+            "password": "t15wf247",
+            "provider_name": "fibrapro",
+            "transport": "udp",
+            "port": 5060
+        }
+    
+    Example - VoIP.ms:
+        {
+            "label": "VoIP.ms Canada",
+            "phone_number": "+14161234567",
+            "sip_address": "toronto.voip.ms",
+            "username": "123456_main",
+            "password": "mypassword",
+            "provider_name": "voipms",
+            "transport": "udp"
+        }
+    """
+    try:
+        log_info(f"======================================")
+        log_info(f"  GENERIC SIP TRUNK CREATION STARTED")
+        log_info(f"======================================")
+        log_info(f"Creating generic SIP trunk with label: '{request.label}'")
+        log_info(f"Provider: {request.provider_name}")
+        log_info(f"Phone number: {request.phone_number}")
+        log_info(f"SIP address: {request.sip_address}")
+        log_info(f"Transport: {request.transport.upper()}")
+        log_info(f"Port: {request.port}")
+        
+        # Import the function from twilio_setup
+        from twilio_setup import create_generic_livekit_trunk
+        
+        # Validate phone number format
+        formatted_number = format_phone_number(request.phone_number)
+        
+        if not validate_phone_number(formatted_number):
+            log_error(f"Invalid phone number format: '{request.phone_number}'")
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid phone number format. Phone number must start with '+' followed by country code and number (e.g., +390110722580)"
+            )
+        
+        # Create LiveKit trunk for generic SIP provider
+        log_info("Creating LiveKit SIP Trunk for generic provider...")
+        livekit_trunk_id = await create_generic_livekit_trunk(
+            sip_address=request.sip_address,
+            username=request.username,
+            password=request.password,
+            phone_number=formatted_number,
+            trunk_name=request.label,
+            provider_name=request.provider_name,
+            transport=request.transport,
+            port=request.port
+        )
+        log_info(f"✓ LiveKit Trunk created: {livekit_trunk_id}")
+        
+        # Log summary
+        log_info(f"")
+        log_info(f"======================================")
+        log_info(f"  GENERIC SIP TRUNK CREATED")
+        log_info(f"======================================")
+        log_info(f"Label:           {request.label}")
+        log_info(f"Provider:        {request.provider_name}")
+        log_info(f"Phone Number:    {formatted_number}")
+        log_info(f"SIP Address:     {request.sip_address}")
+        log_info(f"--------------------------------------")
+        log_info(f"LiveKit Trunk:   {livekit_trunk_id}")
+        log_info(f"--------------------------------------")
+        log_info(f"Configuration:")
+        log_info(f"  └─ Username:   {request.username}")
+        log_info(f"  └─ Transport:  {request.transport.upper()}")
+        log_info(f"  └─ Port:       {request.port}")
+        log_info(f"======================================")
+        log_info(f"")
+        log_info(f"✓ You can now use this trunk for outbound calls!")
+        log_info(f"  Use trunk ID: {livekit_trunk_id}")
+        
+        return CreateGenericSIPTrunkResponse(
+            status="success",
+            message=f"Generic SIP trunk '{request.label}' created successfully for {request.provider_name} provider",
+            livekit_trunk_id=livekit_trunk_id,
+            provider_name=request.provider_name,
+            sip_address=request.sip_address,
+            phone_number=formatted_number,
+            transport=request.transport
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        log_exception(f"Error creating generic SIP trunk: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Generic SIP trunk creation error: {str(e)}"
+        )
+
+
 @router.post("/create-inbound-trunk", response_model=CreateInboundTrunkResponse)
 async def create_inbound_trunk(request: CreateInboundTrunkRequest):
     """
@@ -695,34 +646,22 @@ async def create_inbound_trunk(request: CreateInboundTrunkRequest):
 
 
 @router.post("/create-dispatch-rule", response_model=CreateDispatchRuleResponse)
-async def create_dispatch_rule(request: CreateDispatchRuleRequest):
+async def create_dispatch_rule(sip_trunk_id: str, name: str, agent_name: str):
     """
-    Create a dispatch rule to route incoming SIP calls to a LiveKit room.
-    
-    Dispatch rules determine how incoming calls are routed. Calls matching the
-    trunk IDs will be directed to the specified room.
+    Create a dispatch rule to route incoming SIP calls to LiveKit rooms.
     
     Args:
-        request: CreateDispatchRuleRequest containing:
-            - name: Friendly name for the dispatch rule
-            - trunk_ids: List of trunk IDs to attach this rule to
-            - room_name: Room name to dispatch calls to
-            - room_prefix: Optional room prefix for dynamic rooms
+        sip_trunk_id: The SIP trunk ID to attach this dispatch rule to
+        name: Name for this dispatch rule
+        agent_name: Name of the agent to dispatch calls to
     
     Returns:
         CreateDispatchRuleResponse with dispatch rule details
-    
-    Example:
-        {
-            "name": "MyDispatchRule",
-            "trunk_ids": ["ST_xxxxx", "ST_yyyyy"],
-            "room_name": "call-center-room"
-        }
     """
     try:
-        log_info(f"Creating dispatch rule: '{request.name}'")
-        log_info(f"Trunk IDs: {', '.join(request.trunk_ids)}")
-        log_info(f"Target room: {request.room_name}")
+        log_info(f"Creating dispatch rule: '{name}'")
+        log_info(f"Trunk ID: {sip_trunk_id}")
+        log_info(f"Agent Name: {agent_name}")
         
         # Get LiveKit credentials
         livekit_url = os.getenv("LIVEKIT_URL")
@@ -737,58 +676,59 @@ async def create_dispatch_rule(request: CreateDispatchRuleRequest):
             )
         
         # Initialize LiveKit API
-        lk = api.LiveKitAPI(
+        lkapi = api.LiveKitAPI(
             url=livekit_url,
             api_key=livekit_api_key,
             api_secret=livekit_api_secret
         )
         
         try:
-            from livekit.protocol import sip
+            # Create a dispatch rule to place each caller in a separate room
+            rule = api.SIPDispatchRule(
+                dispatch_rule_individual=api.SIPDispatchRuleIndividual(
+                    room_prefix='call-',
+                )
+            )
             
-            # Create dispatch rule info
-            rule_info = sip.SIPDispatchRuleInfo()
-            rule_info.name = request.name
-            rule_info.trunk_ids.extend(request.trunk_ids)
+            request = api.CreateSIPDispatchRuleRequest(
+                dispatch_rule=api.SIPDispatchRuleInfo(
+                    rule=rule,
+                    name=name,
+                    trunk_ids=[sip_trunk_id],
+                    room_config=api.RoomConfiguration(
+                        agents=[api.RoomAgentDispatch(
+                            agent_name=agent_name,
+                            metadata="job dispatch metadata",
+                        )]
+                    )
+                )
+            )
             
-            # Set dispatch rule - direct to room
-            rule_info.dispatch_rule_direct.room_name = request.room_name
-            if request.room_prefix:
-                rule_info.dispatch_rule_direct.room_prefix = request.room_prefix
+            dispatch = await lkapi.sip.create_sip_dispatch_rule(request)
             
-            # Create request
-            create_request = sip.CreateSIPDispatchRuleRequest()
-            create_request.rule.CopyFrom(rule_info)
-            
-            # Create dispatch rule
-            dispatch_rule = await lk.sip.create_dispatch_rule(create_request)
-            
-            await lk.aclose()
-            
-            log_info(f"✓ Dispatch rule created: {dispatch_rule.sip_dispatch_rule_id}")
+            log_info(f"✓ Dispatch rule created: {dispatch.sip_dispatch_rule_id}")
             
             # Log summary
             log_info(f"")
             log_info(f"======================================")
             log_info(f"  DISPATCH RULE CREATED")
             log_info(f"======================================")
-            log_info(f"Rule Name:       {request.name}")
-            log_info(f"Rule ID:         {dispatch_rule.sip_dispatch_rule_id}")
-            log_info(f"Trunk IDs:       {', '.join(request.trunk_ids)}")
-            log_info(f"Target Room:     {request.room_name}")
-            if request.room_prefix:
-                log_info(f"Room Prefix:     {request.room_prefix}")
+            log_info(f"Rule Name:       {name}")
+            log_info(f"Rule ID:         {dispatch.sip_dispatch_rule_id}")
+            log_info(f"Trunk ID:        {sip_trunk_id}")
+            log_info(f"Agent Name:      {agent_name}")
+            log_info(f"Room Prefix:     call-")
             log_info(f"======================================")
             
             return CreateDispatchRuleResponse(
                 status="success",
-                message=f"Dispatch rule '{request.name}' created successfully",
-                dispatch_rule_id=dispatch_rule.sip_dispatch_rule_id,
-                dispatch_rule_name=request.name
+                message=f"Dispatch rule '{name}' created successfully with room prefix 'call-'",
+                dispatch_rule_id=dispatch.sip_dispatch_rule_id,
+                dispatch_rule_name=name
             )
             
         finally:
-            await lk.aclose()
+            await lkapi.aclose()
     
     except HTTPException:
         raise
@@ -878,7 +818,11 @@ async def setup_inbound_sip(request: SetupInboundSIPRequest):
             rule_info = sip.SIPDispatchRuleInfo()
             rule_info.name = f"{request.name}_dispatch"
             rule_info.trunk_ids.append(trunk.sip_trunk_id)
-            rule_info.dispatch_rule_direct.room_name = request.room_name
+            
+            # Create the direct dispatch rule object
+            direct_rule = sip.SIPDispatchRuleDirect()
+            direct_rule.room_name = request.room_name
+            rule_info.rule.dispatch_rule_direct.CopyFrom(direct_rule)
             
             create_rule_request = sip.CreateSIPDispatchRuleRequest()
             create_rule_request.rule.CopyFrom(rule_info)
