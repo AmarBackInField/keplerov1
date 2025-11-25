@@ -400,8 +400,8 @@ async def entrypoint(ctx: agents.JobContext):
     # Load dynamic configuration from config.json
     try:
         logger.info("Loading dynamic configuration from config.json...")
-        dynamic_config = load_dynamic_config()
         
+        dynamic_config = load_dynamic_config()
         caller_name = dynamic_config.get("caller_name", "Guest")
         dynamic_instruction = dynamic_config.get("agent_instructions", "You are a helpful voice AI assistant.")
         language = dynamic_config.get("tts_language", "en")
@@ -554,7 +554,7 @@ async def entrypoint(ctx: agents.JobContext):
             tts_instance = elevenlabs.TTS(
                 voice_id=voice_id,
                 language=language,
-                model="eleven_turbo_v2_5"
+                model="eleven_flash_v2_5"
             )
         #     tts_instance = cartesia.TTS(
         #     model='sonic-3',
