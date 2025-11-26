@@ -17,7 +17,7 @@ LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY")
 LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET")
 
 # Agent configuration
-AGENT_INSTRUCTIONS = os.getenv("You are a helpful voice AI assistant of Aistein .")
+AGENT_INSTRUCTIONS = os.getenv("AGENT_INSTRUCTIONS", "You are a helpful voice AI assistant of Aistein.")
 TRANSFER_NUMBER = os.getenv("TRANSFER_NUMBER", "+919911062767")
 
 # ------------------------------------------------------------
@@ -45,8 +45,8 @@ logger.info("=" * 60)
 class Assistant(Agent):
     def __init__(self, instructions: str = None) -> None:
         if instructions is None:
-            instructions = AGENT_INSTRUCTIONS
-        logger.info(f"Agent initialized")
+            instructions = AGENT_INSTRUCTIONS or "You are a helpful voice AI assistant of Aistein."
+        logger.info(f"Agent initialized with instructions: {instructions[:100]}...")
         super().__init__(instructions=instructions)
 
     @function_tool
@@ -180,7 +180,7 @@ def run_agent():
     logger.info("=" * 60)
     
     try:
-        agent_name = os.getenv("AGENT_NAME", "inbound-agent-1")
+        agent_name = "love-papa"
         logger.info(f"Agent name: {agent_name}")
         
         worker_options = agents.WorkerOptions(

@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 from threading import Lock
 
-# Configure logger
+# Configure logger (using ASCII-safe log messages for Windows compatibility)
 logger = logging.getLogger("update_config")
 
 # Path to config file (in project root)
@@ -75,7 +75,7 @@ def update_config(
             with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
                 json.dump(config_data, f, indent=4, ensure_ascii=False)
         
-        logger.info(f"✓ Configuration updated successfully")
+        logger.info(f"[OK] Configuration updated successfully")
         logger.info(f"  - Caller Name: {config_data['caller_name']}")
         logger.info(f"  - Agent Instructions: {config_data['agent_instructions'][:100]}...")
         logger.info(f"  - TTS Language: {config_data['tts_language']}")
@@ -90,10 +90,10 @@ def update_config(
         return config_data
         
     except IOError as e:
-        logger.error(f"✗ Failed to write config file: {str(e)}")
+        logger.error(f"[ERROR] Failed to write config file: {str(e)}")
         raise IOError(f"Could not write to config file at {CONFIG_FILE}: {str(e)}")
     except Exception as e:
-        logger.error(f"✗ Unexpected error updating config: {str(e)}")
+        logger.error(f"[ERROR] Unexpected error updating config: {str(e)}")
         raise
 
 
@@ -162,7 +162,7 @@ def load_dynamic_config() -> Dict[str, Any]:
         with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
             config_data = json.load(f)
         
-        logger.info(f"✓ Configuration loaded successfully from {CONFIG_FILE}")
+        logger.info(f"[OK] Configuration loaded successfully from {CONFIG_FILE}")
         logger.info(f"  - Caller Name: {config_data.get('caller_name', 'Not set')}")
         logger.info(f"  - TTS Language: {config_data.get('tts_language', 'Not set')}")
         logger.info(f"  - Voice ID: {config_data.get('voice_id', 'Not set')}")
@@ -176,14 +176,14 @@ def load_dynamic_config() -> Dict[str, Any]:
         return config_data
         
     except json.JSONDecodeError as e:
-        logger.error(f"✗ Invalid JSON in config file: {str(e)}")
+        logger.error(f"[ERROR] Invalid JSON in config file: {str(e)}")
         raise json.JSONDecodeError(
             f"Config file at {CONFIG_FILE} contains invalid JSON",
             e.doc,
             e.pos
         )
     except Exception as e:
-        logger.error(f"✗ Error loading config: {str(e)}")
+        logger.error(f"[ERROR] Error loading config: {str(e)}")
         raise
 
 

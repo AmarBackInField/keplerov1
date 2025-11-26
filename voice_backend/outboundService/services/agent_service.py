@@ -498,25 +498,26 @@ async def entrypoint(ctx: agents.JobContext):
     session_start_time = None
     
     async def cleanup_and_save():
+        """
+        Non-blocking cleanup that runs in background.
+        This ensures participant disconnect doesn't block the server.
+        """
         try:
-            logger.info("Cleanup started...")
+            logger.info("Cleanup started (non-blocking)...")
             
-            # Give websockets time to close gracefully before cleanup
-            await asyncio.sleep(1.0)
-
             # session may not be defined if start() failed — guard it
             if "session" in locals() and session is not None and hasattr(session, "history"):
                 transcript_data = session.history.to_dict()
                 
-                # Save to MongoDB
+                # Save to MongoDB in background (don't block disconnect)
                 try:
-                    # Get caller information from dynamic config
+                    # Get caller information from dynamic config (use cached version)
                     logger.info("Saving transcript to MongoDB...")
                     dynamic_config = load_dynamic_config()
                     caller_name = dynamic_config.get("caller_name", "Guest")
-                    contact_number = dynamic_config.get("contact_number")  # Optional, may not be in config yet
+                    contact_number = dynamic_config.get("contact_number")
                     
-                    # Generate caller_id from room name or use room name as caller_id
+                    # Generate caller_id from room name
                     caller_id = ctx.room.name if ctx.room else f"call_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
                     
                     # Calculate call duration
@@ -561,8 +562,16 @@ async def entrypoint(ctx: agents.JobContext):
         except Exception as e:
             logger.error(f"Error during cleanup: {e}", exc_info=True)
 
-    ctx.add_shutdown_callback(cleanup_and_save)
-    logger.info("[OK] Shutdown callback added")
+    # Wrap cleanup in background task to avoid blocking server on disconnect
+    async def cleanup_wrapper():
+        """Non-blocking wrapper that schedules cleanup as background task"""
+        # Schedule cleanup in background without waiting for it
+        asyncio.create_task(cleanup_and_save())
+        logger.info("[OK] Cleanup task scheduled (non-blocking)")
+        # Return immediately - don't wait for cleanup to finish
+    
+    ctx.add_shutdown_callback(cleanup_wrapper)
+    logger.info("[OK] Shutdown callback added (non-blocking)")
 
     # --------------------------------------------------------
     # Initialize core components
@@ -637,8 +646,7 @@ async def entrypoint(ctx: agents.JobContext):
     # --------------------------------------------------------
     try:
         # await cleanup_previous_rooms(LIVEKIT_API_KEY, LIVEKIT_API_SECRET, LIVEKIT_URL, prefix=room_prefix_for_cleanup)
-        # Small delay to ensure room cleanup completes on server side
-        await asyncio.sleep(0.5)
+        pass
     except Exception as e:
         logger.warning("cleanup_previous_rooms raised an exception (non-fatal): %s", e, exc_info=True)
 
@@ -719,13 +727,8 @@ async def entrypoint(ctx: agents.JobContext):
     except Exception as e:
         logger.error(f"[ERROR] Error while waiting for shutdown: {e}", exc_info=True)
     finally:
-        # Give time for all resources to clean up properly
+        # Fast cleanup - don't block the server
         logger.info("Initiating resource cleanup...")
-        try:
-            # Allow TTS websockets to close gracefully
-            await asyncio.sleep(0.5)
-        except Exception:
-            pass
         
         logger.info("=" * 60)
         logger.info(f"ENTRYPOINT FINISHED - Room: {ctx.room.name}")
