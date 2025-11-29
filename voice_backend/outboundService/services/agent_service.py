@@ -745,8 +745,8 @@ def run_agent():
     logger.info("=" * 60)
     
     # Get agent name from environment or use default
-    agent_name = "voice-assistant"
-    logger.info(f"Starting agent with name: {agent_name}")
+    # agent_name = "voice-assistant"
+    # logger.info(f"Starting agent with name: {agent_name}")
     logger.info(f"Agent will listen for new rooms and auto-dispatch")
     logger.info(f"Agent will run CONTINUOUSLY - press Ctrl+C to stop")
     logger.info("=" * 60)

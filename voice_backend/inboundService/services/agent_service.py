@@ -1,10 +1,21 @@
 import os
 import logging
 import sys
+import asyncio
 from livekit import api
 from livekit import agents
-from livekit.agents import AgentSession, Agent, RoomInputOptions, function_tool, RunContext, get_job_context
-from livekit.plugins import openai, deepgram, noise_cancellation, silero,elevenlabs
+from livekit.agents import (
+    AgentSession, 
+    Agent, 
+    RoomInputOptions, 
+    function_tool, 
+    RunContext, 
+    get_job_context, 
+    JobProcess,
+    JobRequest,
+    AutoSubscribe
+)
+from livekit.plugins import openai, deepgram, noise_cancellation, silero, elevenlabs
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -34,9 +45,21 @@ logging.basicConfig(
 logger = logging.getLogger("services.agent_service")
 
 logger.info("=" * 60)
-logger.info("Inbound Agent Service Starting")
+logger.info("Inbound Agent Service Module Loading")
 logger.info(f"LIVEKIT_URL: {LIVEKIT_URL or 'NOT SET'}")
+logger.info(f"LIVEKIT_API_KEY: {'SET' if LIVEKIT_API_KEY else 'NOT SET'}")
+logger.info(f"LIVEKIT_API_SECRET: {'SET' if LIVEKIT_API_SECRET else 'NOT SET'}")
+logger.info(f"OPENAI_API_KEY: {'SET' if os.getenv('OPENAI_API_KEY') else 'NOT SET'}")
+logger.info(f"DEEPGRAM_API_KEY: {'SET' if os.getenv('DEEPGRAM_API_KEY') else 'NOT SET'}")
+logger.info(f"ELEVENLABS_API_KEY: {'SET' if os.getenv('ELEVEN_API_KEY') else 'NOT SET'}")
+logger.info(f"TRANSFER_NUMBER: {TRANSFER_NUMBER}")
 logger.info("=" * 60)
+
+# Validate required environment variables
+if not LIVEKIT_URL or not LIVEKIT_API_KEY or not LIVEKIT_API_SECRET:
+    logger.error("ERROR: Missing required LiveKit credentials!")
+    logger.error("Please set LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET in .env file")
+    sys.exit(1)
 
 
 # ------------------------------------------------------------
@@ -105,69 +128,150 @@ class Assistant(Agent):
 
 
 # ------------------------------------------------------------
-# Simple Agent entrypoint
+# Request handler - CRITICAL FOR AUTO-ACCEPT
+# ------------------------------------------------------------
+async def request_fnc(req: JobRequest) -> None:
+    """
+    Job request handler - accepts ALL incoming job requests.
+    This is CRITICAL for SIP calls to work properly.
+    """
+    logger.info("=" * 60)
+    logger.info(f"JOB REQUEST RECEIVED!")
+    logger.info(f"Room: {req.room.name}")
+    logger.info(f"Job ID: {req.id}")
+    logger.info(f"Accepting job automatically...")
+    logger.info("=" * 60)
+    
+    # Always accept the job
+    await req.accept(entrypoint_fnc=entrypoint)
+
+
+# ------------------------------------------------------------
+# Inbound Agent entrypoint
 # ------------------------------------------------------------
 async def entrypoint(ctx: agents.JobContext):
-    """Simple entrypoint for inbound voice agent."""
+    """Entrypoint for inbound SIP voice calls."""
     logger.info("=" * 60)
-    logger.info(f"Inbound Call - Room: {ctx.room.name}")
+    logger.info(f"🔥 ENTRYPOINT TRIGGERED - Room: {ctx.room.name}")
+    logger.info(f"Participants: {len(ctx.room.remote_participants)}")
     logger.info("=" * 60)
 
-    # Connect to room
+    # --------------------------------------------------------
+    # Step 1: Connect to room
+    # --------------------------------------------------------
     try:
         logger.info("Connecting to room...")
-        await ctx.connect()
-        logger.info("Connected to room")
+        await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
+        logger.info("[OK] Connected to room successfully")
     except Exception as e:
-        logger.error(f"Failed to connect: {e}", exc_info=True)
+        logger.error(f"[ERROR] Failed to connect to room: {e}", exc_info=True)
         raise
 
-    # Initialize components
+    # Log SIP participant info
+    for participant in ctx.room.remote_participants.values():
+        logger.info(f"Participant: {participant.identity} - {participant.name}")
+
+    # --------------------------------------------------------
+    # Step 2: Initialize AI components (STT, LLM, TTS, VAD)
+    # --------------------------------------------------------
     try:
-        logger.info("Initializing STT, LLM, and TTS...")
+        logger.info("Initializing AI components...")
         
-        stt_instance = deepgram.STT(model="nova-2-general", language="en")
+        # Initialize STT (Deepgram)
+        stt_instance = deepgram.STT(
+            model="nova-2-general",
+            language="en"
+        )
+        logger.info("[OK] STT initialized (Deepgram nova-2-general)")
+        
+        # Initialize LLM (OpenAI)
         llm_instance = openai.LLM(model="gpt-4o-mini")
-        tts_instance = elevenlabs.TTS(
-                voice_id="21m00Tcm4TlvDq8ikWAM",
-                language="en",
-                model="eleven_flash_v2_5"
-            )
+        logger.info("[OK] LLM initialized (gpt-4o-mini)")
         
-        logger.info("Creating session...")
+        # Initialize TTS (ElevenLabs)
+        tts_instance = elevenlabs.TTS(
+            voice_id="21m00Tcm4TlvDq8ikWAM",
+            language="en",
+        )
+        logger.info("[OK] TTS initialized (ElevenLabs)")
+        
+        # Initialize VAD (Silero)
+        vad_instance = silero.VAD.load()
+        logger.info("[OK] VAD initialized (Silero)")
+        
+        # Create session
+        logger.info("Creating AgentSession...")
         session = AgentSession(
-            vad=silero.VAD.load(),
+            vad=vad_instance,
             stt=stt_instance,
             llm=llm_instance,
             tts=tts_instance
         )
-        logger.info("Session components initialized")
+        logger.info("[OK] AgentSession created successfully")
+        
     except Exception as e:
-        logger.error(f"Failed to initialize: {e}", exc_info=True)
+        logger.error(f"[ERROR] Failed to initialize AI components: {e}", exc_info=True)
         raise
 
-    # Create assistant and start session
-    assistant = Assistant()
-    room_options = RoomInputOptions(noise_cancellation=noise_cancellation.BVC())
-
+    # --------------------------------------------------------
+    # Step 3: Create assistant and start session
+    # --------------------------------------------------------
     try:
+        logger.info("Creating Assistant instance...")
+        assistant = Assistant()
+        
+        logger.info("Configuring room input options...")
+        room_options = RoomInputOptions(
+            noise_cancellation=noise_cancellation.BVC()
+        )
+        
         logger.info("Starting agent session...")
-        await session.start(room=ctx.room, agent=assistant, room_input_options=room_options)
-        logger.info("Agent session started")
+        await session.start(
+            room=ctx.room,
+            agent=assistant,
+            room_input_options=room_options
+        )
+        logger.info("[OK] Agent session started successfully")
+        
     except Exception as e:
-        logger.error(f"Failed to start session: {e}", exc_info=True)
+        logger.error(f"[ERROR] Failed to start agent session: {e}", exc_info=True)
         raise
 
-    # Send greeting
+    # --------------------------------------------------------
+    # Step 4: Send greeting
+    # --------------------------------------------------------
     try:
-        await session.generate_reply(instructions="Hello, I'm your AI assistant. How can I help you today?")
-        logger.info("Greeting sent")
+        greeting_message = "Hello, I'm your AI assistant. How can I help you today?"
+        logger.info(f"Sending greeting: '{greeting_message}'")
+        
+        await session.say(greeting_message, allow_interruptions=True)
+        logger.info("[OK] Greeting sent successfully")
+            
     except Exception as e:
-        logger.error(f"Failed to send greeting: {e}", exc_info=True)
+        logger.error(f"[ERROR] Failed to send greeting: {e}", exc_info=True)
 
-    # Wait for session to end
-    logger.info("Session running...")
+    # --------------------------------------------------------
+    # Step 5: Keep session alive
+    # --------------------------------------------------------
+    logger.info("Session running - waiting for call to end...")
     logger.info("=" * 60)
+
+
+def prewarm(proc: JobProcess):
+    """Prewarm function to initialize resources."""
+    livekit_url = os.getenv("LIVEKIT_URL")
+    api_key = os.getenv("LIVEKIT_API_KEY")
+    api_secret = os.getenv("LIVEKIT_API_SECRET")
+
+    if livekit_url and api_key and api_secret:
+        proc.userdata["livekit_credentials"] = {
+            "url": livekit_url,
+            "api_key": api_key,
+            "api_secret": api_secret,
+        }
+        logger.info(f"✓ Prewarm completed - credentials stored")
+    else:
+        logger.warning("⚠ LiveKit credentials not found during prewarm")
 
 
 # ------------------------------------------------------------
@@ -176,22 +280,33 @@ async def entrypoint(ctx: agents.JobContext):
 def run_agent():
     """Run the inbound agent worker."""
     logger.info("=" * 60)
-    logger.info("Starting Inbound Agent")
+    logger.info("🚀 RUN_AGENT CALLED - Starting LiveKit Inbound Agent CLI")
+    logger.info("=" * 60)
+    
+    logger.info("Mode: AUTO-ACCEPT all incoming SIP calls")
+    logger.info("Agent will run CONTINUOUSLY - press Ctrl+C to stop")
     logger.info("=" * 60)
     
     try:
-        agent_name = "love-papa"
-        logger.info(f"Agent name: {agent_name}")
-        
+        # CRITICAL: Use request_fnc for auto-accepting jobs
+        # This allows the agent to accept ANY incoming job request
         worker_options = agents.WorkerOptions(
             entrypoint_fnc=entrypoint,
-            agent_name=agent_name,
+            request_fnc=request_fnc,  # Auto-accept handler
+            prewarm_fnc=prewarm,
+            agent_name="inbound-agent"  # Must match dispatch rule "Agents" field
         )
         
+        logger.info("✓ Worker configured with AUTO-ACCEPT mode")
+        logger.info("✓ Ready to receive calls...")
         agents.cli.run_app(worker_options)
-        logger.info("Agent exited")
+        logger.info("Agent CLI exited normally")
     except KeyboardInterrupt:
-        logger.info("Agent stopped")
+        logger.info("\n👋 Agent stopped by user (Ctrl+C)")
     except Exception as e:
-        logger.error(f"Fatal error: {e}", exc_info=True)
+        logger.error(f"[ERROR] Fatal error in run_agent: {e}", exc_info=True)
         raise
+
+
+if __name__ == "__main__":
+    run_agent()

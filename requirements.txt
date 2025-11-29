@@ -47,7 +47,7 @@ livekit==1.0.19
 livekit-agents==1.2.18
 livekit-plugins-openai==1.2.18
 livekit-plugins-deepgram==1.2.18
-livekit-plugins-elevenlabs==1.2.18
+livekit-plugins-elevenlabs
 livekit-plugins-cartesia==1.2.18
 livekit-plugins-silero==1.2.18
 livekit-plugins-google==1.2.18
