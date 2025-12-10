@@ -48,7 +48,8 @@ async def update_dynamic_config(
     transfer_to: str = None,
     escalation_condition: str = None,
     provider: str = "openai",
-    api_key: str = None
+    api_key: str = None,
+    collection_name: str = None
 ):
     """
     Update the dynamic configuration (config.json) with agent parameters.
@@ -88,6 +89,8 @@ async def update_dynamic_config(
         additional_params["provider"] = provider
     if api_key:
         additional_params["api_key"] = api_key
+    if collection_name:
+        additional_params["collection_name"] = collection_name
     
     # Update config.json using the async function
     await update_config_async(
@@ -112,6 +115,8 @@ async def update_dynamic_config(
         log_info(f"  - LLM Provider: {provider}")
     if api_key:
         log_info(f"  - Custom API Key: {'***' + api_key[-4:] if len(api_key) > 4 else '***'}")
+    if collection_name:
+        log_info(f"  - Collection Name: {collection_name}")
 
 
 @router.post("/outbound", response_model=StatusResponse)
@@ -171,7 +176,8 @@ async def outbound_call(request: OutboundCallRequest):
             transfer_to=request.transfer_to,
             escalation_condition=request.escalation_condition,
             provider=request.provider,
-            api_key=request.api_key
+            api_key=request.api_key,
+            collection_name=request.collection_name
         )
         log_info("✓ config.json updated successfully")
         

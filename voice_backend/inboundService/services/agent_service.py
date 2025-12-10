@@ -196,7 +196,8 @@ async def entrypoint(ctx: agents.JobContext):
         logger.info("[OK] TTS initialized (ElevenLabs)")
         
         # Initialize VAD (Silero)
-        vad_instance = silero.VAD.load()
+        vad_instance = silero.VAD.load(min_silence_duration=0.3,  # 300ms instead of default ~500ms
+    min_speech_duration=0.1)
         logger.info("[OK] VAD initialized (Silero)")
         
         # Create session
@@ -257,21 +258,6 @@ async def entrypoint(ctx: agents.JobContext):
     logger.info("=" * 60)
 
 
-def prewarm(proc: JobProcess):
-    """Prewarm function to initialize resources."""
-    livekit_url = os.getenv("LIVEKIT_URL")
-    api_key = os.getenv("LIVEKIT_API_KEY")
-    api_secret = os.getenv("LIVEKIT_API_SECRET")
-
-    if livekit_url and api_key and api_secret:
-        proc.userdata["livekit_credentials"] = {
-            "url": livekit_url,
-            "api_key": api_key,
-            "api_secret": api_secret,
-        }
-        logger.info(f"✓ Prewarm completed - credentials stored")
-    else:
-        logger.warning("⚠ LiveKit credentials not found during prewarm")
 
 
 # ------------------------------------------------------------
@@ -293,7 +279,6 @@ def run_agent():
         worker_options = agents.WorkerOptions(
             entrypoint_fnc=entrypoint,
             request_fnc=request_fnc,  # Auto-accept handler
-            prewarm_fnc=prewarm,
             agent_name="inbound-agent"  # Must match dispatch rule "Agents" field
         )
         

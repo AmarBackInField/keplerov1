@@ -76,6 +76,7 @@ class OutboundCallRequest(BaseModel):
     escalation_condition: Optional[str] = None  # Condition when to escalate/transfer the call
     provider: Optional[str] = "openai"  # LLM provider ("openai" or "gemini")
     api_key: Optional[str] = None  # Custom API key for the provider
+    collection_name: Optional[str] = None  # RAG collection name for knowledge base queries
 
 
 # ============================================================================

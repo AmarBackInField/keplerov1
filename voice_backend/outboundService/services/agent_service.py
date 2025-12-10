@@ -3,6 +3,7 @@ import json
 import asyncio
 import logging
 import sys
+import aiohttp
 import aiosmtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -390,6 +391,68 @@ class Assistant(Agent):
                 
         except Exception as e:
             logger.error(f"Error in send_email_tool: {str(e)}", exc_info=True)
+            return f"error: {str(e)}"
+    
+    @function_tool
+    async def query_knowledge_base(
+        self,
+        ctx: RunContext,
+        query: str,
+        top_k: int = 5
+    ) -> str:
+        """
+        Query the RAG knowledge base to retrieve relevant information.
+        Use this when the user asks questions that require looking up information from documents.
+        
+        Args:
+            query: The question or query to search for in the knowledge base
+            
+        Returns:
+            Answer from the knowledge base or error message
+        """
+        try:
+            # Get collection_name from dynamic config
+            dynamic_config = load_dynamic_config()
+            collection_name = dynamic_config.get("collection_name", "default")
+            
+            logger.info(f"RAG query: '{query}' in collection '{collection_name}'")
+            
+            # Get API base URL from environment
+            api_base_url = os.getenv("API_BASE_URL", "http://localhost:8000")
+            rag_endpoint = f"{api_base_url}/rag/chat"
+            
+            # Prepare request payload
+            payload = {
+                "query": query,
+                "collection_name": collection_name,
+                "top_k": top_k
+            }
+            
+            logger.info(f"Sending RAG request to: {rag_endpoint}")
+            
+            # Make async HTTP request to RAG endpoint
+            import aiohttp
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    rag_endpoint,
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=30)
+                ) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        answer = result.get("answer", "No answer found")
+                        logger.info(f"RAG query successful, answer length: {len(answer)} chars")
+                        return answer
+                    else:
+                        error_text = await response.text()
+                        logger.error(f"RAG endpoint returned {response.status}: {error_text}")
+                        return f"error: Failed to query knowledge base (status {response.status})"
+            
+        except asyncio.TimeoutError:
+            logger.error("RAG query timed out")
+            return "error: Knowledge base query timed out"
+        except Exception as e:
+            logger.error(f"Error in query_knowledge_base: {str(e)}", exc_info=True)
             return f"error: {str(e)}"
 
 

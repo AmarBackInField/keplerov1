@@ -86,6 +86,8 @@ def update_config(
             logger.info(f"  - Transfer To: {config_data['transfer_to']}")
         if config_data.get('escalation_condition'):
             logger.info(f"  - Escalation Condition: {config_data['escalation_condition']}")
+        if config_data.get('collection_name'):
+            logger.info(f"  - Collection Name: {config_data['collection_name']}")
         
         return config_data
         
@@ -172,6 +174,8 @@ def load_dynamic_config() -> Dict[str, Any]:
             logger.info(f"  - Transfer To: {config_data.get('transfer_to')}")
         if config_data.get('escalation_condition'):
             logger.info(f"  - Escalation Condition: {config_data.get('escalation_condition')}")
+        if config_data.get('collection_name'):
+            logger.info(f"  - Collection Name: {config_data.get('collection_name')}")
         
         return config_data
         
