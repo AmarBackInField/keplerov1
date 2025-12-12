@@ -128,8 +128,8 @@ async def chat(request: ChatRequest):
             api_key=request.api_key
         )
         
-            collection_count = len(collections) if collections else "all"
-            log_info(f"Workflow completed - Retrieved {len(result['retrieved_docs'])} documents from {collection_count} collection(s)")
+        collection_count = len(collections) if collections else "all"
+        log_info(f"Workflow completed - Retrieved {len(result['retrieved_docs'])} documents from {collection_count} collection(s)")
         
         # Store chat message in MongoDB
         try:
