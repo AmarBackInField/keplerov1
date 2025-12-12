@@ -136,21 +136,20 @@ class RAGWorkflow:
         """
         try:
             # Get collection names from state (supports both old and new format)
-            collections = []
+            collections = None
             if state.get("collection_names"):
                 collections = state["collection_names"]
             elif state.get("collection_name"):
                 collections = [state["collection_name"]]
             
-            if not collections:
-                log_error("No collections specified for retrieval")
-                state["retrieved_docs"] = []
-                state["context"] = "No collections specified for search."
-                return state
-            
-            log_info(f"Retrieving documents from collections: {collections} for query: '{state['query']}'")
+            # If collections is empty list or None, search ALL documents
+            if collections:
+                log_info(f"Retrieving documents from collections: {collections} for query: '{state['query']}'")
+            else:
+                log_info(f"Retrieving documents from ALL collections for query: '{state['query']}'")
             
             # Retrieve documents using RAG service with multiple collections support
+            # If collections is None or empty, searches all documents
             retrieved_docs = self.rag_service.retrieval_based_search(
                 query=state["query"],
                 collections=collections,
@@ -163,7 +162,8 @@ class RAGWorkflow:
                     f"Document {i+1} (from {doc.get('collection', 'unknown')}, Score: {doc['score']:.3f}):\n{doc['text']}"
                     for i, doc in enumerate(retrieved_docs)
                 ])
-                log_info(f"Retrieved {len(retrieved_docs)} documents from {len(collections)} collection(s)")
+                collection_count = len(collections) if collections else "all"
+                log_info(f"Retrieved {len(retrieved_docs)} documents from {collection_count} collection(s)")
             else:
                 context = "No relevant documents found in the knowledge base."
                 log_info("No documents retrieved")

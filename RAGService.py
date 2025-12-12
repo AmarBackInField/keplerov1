@@ -252,15 +252,16 @@ class RAGService:
             raise Exception(f"Error loading data to Qdrant: {str(e)}")
     
 
-    def retrieval_based_search(self, query: str, collections: List[str], top_k: int = 5):
+    def retrieval_based_search(self, query: str, collections: Optional[List[str]] = None, top_k: int = 5):
         """
-        Search for relevant documents across multiple logical collections.
+        Search for relevant documents across multiple logical collections or all documents.
         All data is stored in a single Qdrant collection "main_collection" with 
         "source_collection" metadata to differentiate logical collections.
         
         Args:
             query: Search query
-            collections: List of logical collection names to search in
+            collections: List of logical collection names to search in. 
+                        If None or empty, searches ALL documents in main_collection.
             top_k: Number of top results to return
             
         Returns:
@@ -269,21 +270,23 @@ class RAGService:
         try:
             query_embedding = self.embeddings.embed_query(query)
 
-            # Build filter for multiple collections
-            qdrant_filter = rest.Filter(
-                must=[
-                    rest.FieldCondition(
-                        key="source_collection",
-                        match=rest.MatchAny(any=collections)
-                    )
-                ]
-            )
+            # Build filter only if specific collections are requested
+            qdrant_filter = None
+            if collections and len(collections) > 0:
+                qdrant_filter = rest.Filter(
+                    must=[
+                        rest.FieldCondition(
+                            key="source_collection",
+                            match=rest.MatchAny(any=collections)
+                        )
+                    ]
+                )
 
             search_results = self.qdrant_client.search(
                 collection_name="main_collection",  # single Qdrant collection
                 query_vector=query_embedding,
                 limit=top_k,
-                query_filter=qdrant_filter
+                query_filter=qdrant_filter  # None = search all documents
             )
 
             results = []
@@ -291,7 +294,7 @@ class RAGService:
                 results.append({
                     "text": result.payload.get("text", ""),
                     "score": result.score,
-                    "collection": result.payload.get("source_collection", ""),
+                    "collection": result.payload.get("source_collection", "unknown"),
                     "chunk_index": result.payload.get("chunk_index", 0)
                 })
 

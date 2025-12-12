@@ -2,6 +2,15 @@ import os
 import json
 import asyncio
 import logging
+import os
+import logging
+import sys
+import asyncio
+
+# Add project root to Python path to import RAGService
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..'))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 import sys
 import aiohttp
 import aiosmtplib
@@ -21,6 +30,8 @@ from livekit.plugins import (
     silero,
     google
 )
+from RAGService import RAGService
+
 # from voice_backend.outboundService.common.config.settings import ROOM_NAME
 from dotenv import load_dotenv
 from common.config.settings import (
@@ -236,10 +247,34 @@ async def cleanup_previous_rooms(api_key, api_secret, server_url, prefix="agent-
 # Assistant definition
 # ------------------------------------------------------------
 class Assistant(Agent):
-    def __init__(self, instructions: str = None) -> None:
+    def __init__(self, instructions: str = None, collection_names: list = None) -> None:
         if instructions is None:
             instructions = os.getenv("AGENT_INSTRUCTIONS", "You are a helpful voice AI assistant.")
         logger.info(f"Agent initialized with instructions: {instructions}")
+        
+        # Store collection_names for knowledge base searches
+        self.collection_names = collection_names
+        if collection_names:
+            logger.info(f"RAG collections configured: {collection_names}")
+        else:
+            logger.info("RAG will search ALL collections (no filter)")
+        
+        # Initialize RAG service with required credentials
+        qdrant_url = os.getenv("QDRANT_URL")
+        qdrant_api_key = os.getenv("QDRANT_API_KEY")
+        openai_api_key = os.getenv("OPENAI_API_KEY")
+        
+        if qdrant_url and qdrant_api_key and openai_api_key:
+            self.rag_service = RAGService(
+                qdrant_url=qdrant_url,
+                qdrant_api_key=qdrant_api_key,
+                openai_api_key=openai_api_key
+            )
+            logger.info("RAG service initialized successfully")
+        else:
+            self.rag_service = None
+            logger.warning("RAG service not initialized - missing credentials")
+        
         super().__init__(instructions=instructions)
 
     @function_tool
@@ -394,66 +429,72 @@ class Assistant(Agent):
             return f"error: {str(e)}"
     
     @function_tool
-    async def query_knowledge_base(
-        self,
-        ctx: RunContext,
-        query: str,
-        top_k: int = 5
-    ) -> str:
+    async def knowledge_base_search(self, query: str) -> str:
         """
-        Query the RAG knowledge base to retrieve relevant information.
-        Use this when the user asks questions that require looking up information from documents.
+        Search the knowledge base for detailed information about technical topics, products, services, or company information.
+        
+        Use this tool when the user asks about:
+        - Technical topics (e.g., "What is langchain?", "How does langgraph work?", "Explain MCP servers")
+        - Product details, features, or specifications
+        - Company information, policies, or procedures
+        - Any specific information that requires looking up documentation
+        - Comparisons or detailed explanations
+        
+        DO NOT use this for:
+        - General conversation or greetings
+        - Simple yes/no questions you can answer directly
+        - Personal opinions or subjective matters
+        
+        Always say "Let me check that for you" before calling this function.
         
         Args:
-            query: The question or query to search for in the knowledge base
-            
+            query: The user's question to search for (e.g., "What is langchain and how does it work?")
+        
         Returns:
-            Answer from the knowledge base or error message
+            Relevant information from the knowledge base
         """
+        logger.info(f"Knowledge base search requested for query: {query}")
+        
+        # Acknowledgment message that agent will speak
+        acknowledgment = "Let me check that for you. "
+        
+        # Check if RAG service is available
+        if not self.rag_service:
+            logger.error("RAG service not initialized")
+            return acknowledgment + "I'm sorry, the knowledge base is not available right now."
+        
         try:
-            # Get collection_name from dynamic config
-            dynamic_config = load_dynamic_config()
-            collection_name = dynamic_config.get("collection_name", "default")
+            # Use configured collection_names or search all if not specified
+            collections = self.collection_names if self.collection_names else None
             
-            logger.info(f"RAG query: '{query}' in collection '{collection_name}'")
+            if collections:
+                logger.info(f"Searching in collections: {collections}")
+            else:
+                logger.info("Searching across ALL documents in main_collection (no collection filter)")
             
-            # Get API base URL from environment
-            api_base_url = os.getenv("API_BASE_URL", "http://localhost:8000")
-            rag_endpoint = f"{api_base_url}/rag/chat"
+            # Perform search with configured collections or all documents
+            search_results = self.rag_service.retrieval_based_search(
+                query=query,
+                collections=collections,
+                top_k=3
+            )
             
-            # Prepare request payload
-            payload = {
-                "query": query,
-                "collection_name": collection_name,
-                "top_k": top_k
-            }
+            # Format results into a readable answer
+            if not search_results:
+                return acknowledgment + "I couldn't find any relevant information in the knowledge base."
             
-            logger.info(f"Sending RAG request to: {rag_endpoint}")
+            # Extract and combine text from top results
+            relevant_texts = [result['text'] for result in search_results]
+            combined_context = " ".join(relevant_texts[:2])  # Use top 2 results
             
-            # Make async HTTP request to RAG endpoint
-            import aiohttp
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    rag_endpoint,
-                    json=payload,
-                    timeout=aiohttp.ClientTimeout(total=30)
-                ) as response:
-                    if response.status == 200:
-                        result = await response.json()
-                        answer = result.get("answer", "No answer found")
-                        logger.info(f"RAG query successful, answer length: {len(answer)} chars")
-                        return answer
-                    else:
-                        error_text = await response.text()
-                        logger.error(f"RAG endpoint returned {response.status}: {error_text}")
-                        return f"error: Failed to query knowledge base (status {response.status})"
+            logger.info(f"Found {len(search_results)} results from collections: {[r.get('collection') for r in search_results]}")
             
-        except asyncio.TimeoutError:
-            logger.error("RAG query timed out")
-            return "error: Knowledge base query timed out"
+            # Return acknowledgment + context for the agent to synthesize an answer
+            return acknowledgment + f"Based on the knowledge base: {combined_context}"
+            
         except Exception as e:
-            logger.error(f"Error in query_knowledge_base: {str(e)}", exc_info=True)
-            return f"error: {str(e)}"
+            logger.error(f"Error in knowledge base search: {e}", exc_info=True)
+            return acknowledgment + "I'm sorry, I encountered an error while searching the knowledge base."
 
 
 # ------------------------------------------------------------
@@ -477,6 +518,7 @@ async def entrypoint(ctx: agents.JobContext):
         escalation_condition = dynamic_config.get("escalation_condition")
         provider = dynamic_config.get("provider", "openai").lower()
         api_key = dynamic_config.get("api_key")
+        collection_names = dynamic_config.get("collection_names")  # List of collections to search in RAG
 
         # Build full instructions with escalation condition if provided
         if escalation_condition:
@@ -521,6 +563,10 @@ async def entrypoint(ctx: agents.JobContext):
         logger.info(f"  - LLM Provider: {provider}")
         if api_key:
             logger.info(f"  - Custom API Key: {'***' + api_key[-4:] if len(api_key) > 4 else '***'}")
+        if collection_names:
+            logger.info(f"  - RAG Collections: {collection_names}")
+        else:
+            logger.info(f"  - RAG Collections: ALL (no filter)")
         logger.info(f"  - Agent Instructions: {dynamic_instruction[:100]}...")
         if escalation_condition:
             logger.info(f"  - Escalation Condition: {escalation_condition}")
@@ -550,6 +596,7 @@ async def entrypoint(ctx: agents.JobContext):
         voice_id = "21m00Tcm4TlvDq8ikWAM"
         provider = "openai"
         api_key = None
+        collection_names = None  # Default: search all collections
     
     # Static config from environment
     room_prefix_for_cleanup = os.getenv("ROOM_CLEANUP_PREFIX", "agent-room")
@@ -729,7 +776,7 @@ async def entrypoint(ctx: agents.JobContext):
     # --------------------------------------------------------
     # Initialize assistant and start session
     # --------------------------------------------------------
-    assistant = Assistant(instructions=instructions)
+    assistant = Assistant(instructions=instructions, collection_names=collection_names)
     room_options = RoomInputOptions(noise_cancellation=noise_cancellation.BVC())
 
     try:

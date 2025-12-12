@@ -2,6 +2,12 @@ import os
 import logging
 import sys
 import asyncio
+
+# Add project root to Python path to import RAGService
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..'))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
 from livekit import api
 from livekit import agents
 from livekit.agents import (
@@ -53,7 +59,10 @@ logger.info(f"LIVEKIT_API_SECRET: {'SET' if LIVEKIT_API_SECRET else 'NOT SET'}")
 logger.info(f"OPENAI_API_KEY: {'SET' if os.getenv('OPENAI_API_KEY') else 'NOT SET'}")
 logger.info(f"DEEPGRAM_API_KEY: {'SET' if os.getenv('DEEPGRAM_API_KEY') else 'NOT SET'}")
 logger.info(f"ELEVENLABS_API_KEY: {'SET' if os.getenv('ELEVEN_API_KEY') else 'NOT SET'}")
+logger.info(f"QDRANT_URL: {'SET' if os.getenv('QDRANT_URL') else 'NOT SET'}")
+logger.info(f"QDRANT_API_KEY: {'SET' if os.getenv('QDRANT_API_KEY') else 'NOT SET'}")
 logger.info(f"TRANSFER_NUMBER: {TRANSFER_NUMBER}")
+logger.info(f"RAG Mode: Search ALL documents in main_collection (no collection filter)")
 logger.info("=" * 60)
 
 # Validate required environment variables
@@ -71,7 +80,23 @@ class Assistant(Agent):
         if instructions is None:
             instructions = AGENT_INSTRUCTIONS or "You are a helpful voice AI assistant of Aistein."
         logger.info(f"Agent initialized with instructions: {instructions[:100]}...")
-        self.rag_service = RAGService()
+        
+        # Initialize RAG service with required credentials
+        qdrant_url = os.getenv("QDRANT_URL")
+        qdrant_api_key = os.getenv("QDRANT_API_KEY")
+        openai_api_key = os.getenv("OPENAI_API_KEY")
+        
+        if qdrant_url and qdrant_api_key and openai_api_key:
+            self.rag_service = RAGService(
+                qdrant_url=qdrant_url,
+                qdrant_api_key=qdrant_api_key,
+                openai_api_key=openai_api_key
+            )
+            logger.info("RAG service initialized successfully")
+        else:
+            self.rag_service = None
+            logger.warning("RAG service not initialized - missing credentials")
+        
         super().__init__(instructions=instructions)
 
     @function_tool
@@ -130,11 +155,50 @@ class Assistant(Agent):
 
     @function_tool
     async def knowledge_base_search(self, query: str) -> str:
-        """Search the knowledge base for the query."""
+        """
+        Search in the entire knowledge base for information. Use this when user asks specific questions.
+        This searches ALL documents in main_collection without filtering by specific collections.
+        The agent will say 'Let me check' before calling this.
+        
+        Args:
+            query: The user's question to search for
+        """
         logger.info(f"Knowledge base search requested for query: {query}")
         
-        answer = self.rag_service.search_knowledge_base(query)
-        return answer
+        # Acknowledgment message that agent will speak
+        acknowledgment = "Let me check that for you. "
+        
+        # Check if RAG service is available
+        if not self.rag_service:
+            logger.error("RAG service not initialized")
+            return acknowledgment + "I'm sorry, the knowledge base is not available right now."
+        
+        try:
+            logger.info("Searching across ALL documents in main_collection (no collection filter)")
+            
+            # Perform search without collection filter (searches all documents)
+            search_results = self.rag_service.retrieval_based_search(
+                query=query,
+                collections=None,  # No filter = search all documents
+                top_k=3
+            )
+            
+            # Format results into a readable answer
+            if not search_results:
+                return acknowledgment + "I couldn't find any relevant information in the knowledge base."
+            
+            # Extract and combine text from top results
+            relevant_texts = [result['text'] for result in search_results]
+            combined_context = " ".join(relevant_texts[:2])  # Use top 2 results
+            
+            logger.info(f"Found {len(search_results)} results from collections: {[r.get('collection') for r in search_results]}")
+            
+            # Return acknowledgment + context for the agent to synthesize an answer
+            return acknowledgment + f"Based on the knowledge base: {combined_context}"
+            
+        except Exception as e:
+            logger.error(f"Error in knowledge base search: {e}", exc_info=True)
+            return acknowledgment + "I'm sorry, I encountered an error while searching the knowledge base."
 
 # ------------------------------------------------------------
 # Request handler - CRITICAL FOR AUTO-ACCEPT

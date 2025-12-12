@@ -49,7 +49,7 @@ async def update_dynamic_config(
     escalation_condition: str = None,
     provider: str = "openai",
     api_key: str = None,
-    collection_name: str = None
+    collection_names: list = None
 ):
     """
     Update the dynamic configuration (config.json) with agent parameters.
@@ -66,6 +66,7 @@ async def update_dynamic_config(
         escalation_condition: Condition when to escalate/transfer the call
         provider: LLM provider ("openai" or "gemini", default: "openai")
         api_key: Custom API key for the provider (optional)
+        collection_names: List of RAG collection names to search (optional)
     """
     # Build the full instruction
     if dynamic_instruction:
@@ -89,8 +90,8 @@ async def update_dynamic_config(
         additional_params["provider"] = provider
     if api_key:
         additional_params["api_key"] = api_key
-    if collection_name:
-        additional_params["collection_name"] = collection_name
+    if collection_names:
+        additional_params["collection_names"] = collection_names
     
     # Update config.json using the async function
     await update_config_async(
@@ -115,8 +116,8 @@ async def update_dynamic_config(
         log_info(f"  - LLM Provider: {provider}")
     if api_key:
         log_info(f"  - Custom API Key: {'***' + api_key[-4:] if len(api_key) > 4 else '***'}")
-    if collection_name:
-        log_info(f"  - Collection Name: {collection_name}")
+    if collection_names:
+        log_info(f"  - RAG Collections: {collection_names}")
 
 
 @router.post("/outbound", response_model=StatusResponse)
@@ -140,17 +141,26 @@ async def outbound_call(request: OutboundCallRequest):
             - escalation_condition: Condition when to escalate/transfer (optional)
             - provider: LLM provider ("openai" or "gemini", default: "openai")
             - api_key: Custom API key for the provider (optional)
+            - collection_names: List of RAG collections to search (optional)
         
     Returns:
         StatusResponse with call status and caller_id (room name)
     
-    Example:
+    Examples:
+        Basic call:
         {
             "phone_number": "+1234567890",
             "name": "John Doe",
-            "dynamic_instruction": "Ask about appointment",
-            "provider": "gemini",
-            "api_key": "your-gemini-api-key"
+            "dynamic_instruction": "Ask about appointment"
+        }
+        
+        With RAG collections:
+        {
+            "phone_number": "+1234567890",
+            "name": "John Doe",
+            "dynamic_instruction": "Answer questions about our products",
+            "collection_names": ["product_docs", "pricing_info"],
+            "provider": "openai"
         }
     """
     try:
@@ -168,6 +178,15 @@ async def outbound_call(request: OutboundCallRequest):
         
         # Update config.json with dynamic parameters
         log_info("Updating config.json with dynamic parameters...")
+        
+        # Handle collection_name for backward compatibility
+        collection_names_param = None
+        if hasattr(request, 'collection_names') and request.collection_names:
+            collection_names_param = request.collection_names
+        elif hasattr(request, 'collection_name') and request.collection_name:
+            # Convert single collection_name to list for backward compatibility
+            collection_names_param = [request.collection_name]
+        
         await update_dynamic_config(
             dynamic_instruction=request.dynamic_instruction,
             caller_name=request.name,
@@ -177,7 +196,7 @@ async def outbound_call(request: OutboundCallRequest):
             escalation_condition=request.escalation_condition,
             provider=request.provider,
             api_key=request.api_key,
-            collection_name=request.collection_name
+            collection_names=collection_names_param
         )
         log_info("✓ config.json updated successfully")
         

@@ -76,14 +76,13 @@ async def chat(request: ChatRequest):
     try:
         # Get collections list (supports both old and new format)
         collections = request.get_collections()
-        log_info(f"Chat request - Query: '{request.query}', Collections: {collections}, Thread: '{request.thread_id}'")
         
-        # Validate that at least one collection is specified
+        # If no collections specified, search ALL documents (set to None for all-search)
         if not collections:
-            raise HTTPException(
-                status_code=400,
-                detail="At least one collection must be specified (collection_name or collection_names)"
-            )
+            collections = None
+            log_info(f"Chat request - Query: '{request.query}', Collections: ALL (no filter), Thread: '{request.thread_id}'")
+        else:
+            log_info(f"Chat request - Query: '{request.query}', Collections: {collections}, Thread: '{request.thread_id}'")
         
         # Use thread_id as instance_id (or generate a default one)
         instance_id = request.thread_id if request.thread_id else "default"
@@ -92,13 +91,17 @@ async def chat(request: ChatRequest):
         try:
             existing_instance = mongodb_manager.get_chatbot_instance(instance_id)
             if not existing_instance:
+                # Store collection info for metadata
+                collection_info = request.collection_name or (
+                    ",".join(collections) if collections else "all"
+                )
                 mongodb_manager.create_chatbot_instance(
                     instance_id=instance_id,
-                    collection_name=request.collection_name or ",".join(collections),
+                    collection_name=collection_info,
                     metadata={
                         "top_k": request.top_k,
                         "created_via": "chat_endpoint",
-                        "collections": collections
+                        "collections": collections if collections else "all"
                     }
                 )
                 log_info(f"Created new chatbot instance: {instance_id}")
@@ -125,7 +128,8 @@ async def chat(request: ChatRequest):
             api_key=request.api_key
         )
         
-        log_info(f"Workflow completed - Retrieved {len(result['retrieved_docs'])} documents from {len(collections)} collection(s)")
+            collection_count = len(collections) if collections else "all"
+            log_info(f"Workflow completed - Retrieved {len(result['retrieved_docs'])} documents from {collection_count} collection(s)")
         
         # Store chat message in MongoDB
         try:
