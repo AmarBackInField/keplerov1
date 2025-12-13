@@ -2,6 +2,8 @@ import os
 import logging
 import sys
 import asyncio
+from datetime import datetime
+from pathlib import Path
 
 # Add project root to Python path to import RAGService
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..'))
@@ -24,6 +26,11 @@ from livekit.agents import (
 from livekit.plugins import openai, deepgram, noise_cancellation, silero, elevenlabs
 from dotenv import load_dotenv
 from RAGService import RAGService
+
+# Add database imports
+project_root = Path(__file__).parent.parent.parent.parent
+sys.path.insert(0, str(project_root))
+from database.mongo import get_mongodb_manager
 
 load_dotenv()
 
@@ -245,6 +252,216 @@ async def entrypoint(ctx: agents.JobContext):
         logger.info(f"Participant: {participant.identity} - {participant.name}")
 
     # --------------------------------------------------------
+    # Track session variables for cleanup
+    # --------------------------------------------------------
+    session_start_time = None
+    egress_id = None
+    gcs_bucket = None
+
+    # --------------------------------------------------------
+    # Step 1.5: Recording and cleanup functions
+    # --------------------------------------------------------
+    async def start_recording():
+        """Start recording the room audio to Google Cloud Storage."""
+        nonlocal egress_id, gcs_bucket
+        try:
+            logger.info("Starting GCS recording...")
+            
+            # Validate GCS configuration
+            gcs_bucket = os.getenv("GCS_BUCKET_NAME")
+            gcs_credentials_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+            
+            if not gcs_bucket:
+                logger.warning("GCS_BUCKET_NAME not set - skipping recording")
+                return
+            
+            if not gcs_credentials_path:
+                logger.warning("GOOGLE_APPLICATION_CREDENTIALS not set - skipping recording")
+                return
+            
+            # Read credentials file content
+            try:
+                with open(gcs_credentials_path, 'r') as f:
+                    credentials_json = f.read()
+            except FileNotFoundError:
+                logger.error(f"Credentials file not found: {gcs_credentials_path}")
+                return
+            except Exception as e:
+                logger.error(f"Failed to read credentials file: {e}")
+                return
+            
+            # Start room composite egress using the job context API
+            egress_info = await ctx.api.egress.start_room_composite_egress(
+                api.RoomCompositeEgressRequest(
+                    room_name=ctx.room.name,
+                    audio_only=True,
+                    file_outputs=[
+                        api.EncodedFileOutput(
+                            file_type=api.EncodedFileType.OGG,
+                            filepath=f"calls/{ctx.room.name}.ogg",
+                            gcp=api.GCPUpload(
+                                bucket=gcs_bucket,
+                                credentials=credentials_json,
+                            ),
+                        )
+                    ],
+                )
+            )
+            
+            # Store egress ID for cleanup
+            egress_id = egress_info.egress_id
+            
+            logger.info(f"Recording started successfully - Egress ID: {egress_id}")
+            logger.info(f"Recording will be saved to: gs://{gcs_bucket}/calls/{ctx.room.name}.ogg")
+            
+        except Exception as e:
+            logger.error(f"Failed to start recording: {e}", exc_info=True)
+            logger.warning("Call will continue without recording")
+    
+    async def stop_recording():
+        """
+        Stop the egress recording while the connection is still active.
+        This runs BEFORE the main cleanup to ensure API is still available.
+        """
+        nonlocal egress_id, gcs_bucket
+        if not egress_id:
+            logger.info("No active recording to stop (egress_id not set)")
+            return
+            
+        try:
+            logger.info(f"Stopping egress recording: {egress_id}")
+            
+            # Try to use existing ctx.api first
+            try:
+                await ctx.api.egress.stop_egress(
+                    api.StopEgressRequest(egress_id=egress_id)
+                )
+                logger.info(f"✓ Recording stopped successfully - Egress ID: {egress_id}")
+                if gcs_bucket:
+                    logger.info(f"✓ Recording saved to: gs://{gcs_bucket}/calls/{ctx.room.name}.ogg")
+                return
+            except Exception as ctx_error:
+                logger.warning(f"Failed to stop egress via ctx.api: {ctx_error}")
+                logger.info("Attempting with fresh API client...")
+                
+                # Fallback: Create a fresh API client if ctx.api is unavailable
+                if LIVEKIT_URL and LIVEKIT_API_KEY and LIVEKIT_API_SECRET:
+                    try:
+                        fresh_api = api.LiveKitAPI(
+                            url=LIVEKIT_URL,
+                            api_key=LIVEKIT_API_KEY,
+                            api_secret=LIVEKIT_API_SECRET
+                        )
+                        await fresh_api.egress.stop_egress(
+                            api.StopEgressRequest(egress_id=egress_id)
+                        )
+                        await fresh_api.aclose()
+                        logger.info(f"✓ Recording stopped successfully (fresh client) - Egress ID: {egress_id}")
+                        if gcs_bucket:
+                            logger.info(f"✓ Recording saved to: gs://{gcs_bucket}/calls/{ctx.room.name}.ogg")
+                        return
+                    except Exception as fresh_error:
+                        logger.error(f"Failed to stop egress with fresh client: {fresh_error}")
+                        raise
+                else:
+                    logger.error("Cannot create fresh API client - credentials not available")
+                    raise ctx_error
+                    
+        except Exception as egress_error:
+            logger.error(f"All attempts to stop egress failed: {egress_error}", exc_info=True)
+            logger.info("Note: Recording will still finalize automatically when room closes")
+            logger.info(f"Check GCS bucket for: gs://{gcs_bucket}/calls/{ctx.room.name}.ogg" if gcs_bucket else "Check GCS bucket for recording")
+    
+    async def cleanup_and_save():
+        """
+        Non-blocking cleanup that runs in background.
+        This ensures participant disconnect doesn't block the server.
+        """
+        nonlocal egress_id, gcs_bucket, session_start_time
+        try:
+            logger.info("Cleanup started (non-blocking)...")
+            
+            # --------------------------------------------------------
+            # Save transcript to MongoDB
+            # --------------------------------------------------------
+            if "session" in locals() and session is not None and hasattr(session, "history"):
+                transcript_data = session.history.to_dict()
+                
+                try:
+                    logger.info("Saving transcript to MongoDB...")
+                    
+                    # Generate caller_id from room name
+                    caller_id = ctx.room.name if ctx.room else f"inbound_call_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                    
+                    # Calculate call duration
+                    duration_seconds = None
+                    if session_start_time is not None:
+                        end_time = datetime.utcnow()
+                        duration_delta = end_time - session_start_time
+                        duration_seconds = int(duration_delta.total_seconds())
+                        logger.info(f"Call duration: {duration_seconds} seconds ({duration_delta})")
+                    
+                    # Get MongoDB manager
+                    mongodb_uri = os.getenv("MONGODB_URI")
+                    if mongodb_uri:
+                        mongo_manager = get_mongodb_manager(mongodb_uri)
+                        
+                        # Build metadata with duration and recording URL
+                        metadata = {
+                            "room_name": ctx.room.name if ctx.room else None,
+                            "timestamp": datetime.utcnow().isoformat(),
+                            "call_type": "inbound"
+                        }
+                        if duration_seconds is not None:
+                            metadata["duration_seconds"] = duration_seconds
+                            metadata["duration_formatted"] = f"{duration_seconds // 60}m {duration_seconds % 60}s"
+                        
+                        # Add recording URL if available
+                        if gcs_bucket and ctx.room:
+                            recording_url = f"https://storage.googleapis.com/{gcs_bucket}/calls/{ctx.room.name}.ogg"
+                            metadata["recording_url"] = recording_url
+                            logger.info(f"Recording URL added to metadata: {recording_url}")
+                        
+                        transcript_id = mongo_manager.save_transcript(
+                            transcript=transcript_data,
+                            caller_id=caller_id,
+                            name="Inbound Caller",
+                            contact_number=None,
+                            metadata=metadata
+                        )
+                        logger.info(f"Transcript saved to MongoDB with ID: {transcript_id}")
+                    else:
+                        logger.warning("MONGODB_URI not set, skipping MongoDB transcript save")
+                except Exception as mongo_error:
+                    logger.error(f"Failed to save transcript to MongoDB: {mongo_error}", exc_info=True)
+            else:
+                logger.warning("No session history to save (session not created or no history).")
+            
+            logger.info("Cleanup completed successfully")
+        except Exception as e:
+            logger.error(f"Error during cleanup: {e}", exc_info=True)
+
+    async def cleanup_wrapper():
+        """Non-blocking wrapper that schedules cleanup as background task"""
+        asyncio.create_task(cleanup_and_save())
+        logger.info("[OK] Cleanup task scheduled (non-blocking)")
+    
+    async def recording_stop_wrapper():
+        """Stop recording BEFORE main cleanup while API is still available"""
+        try:
+            await stop_recording()
+            logger.info("[OK] Recording stop completed")
+        except Exception as e:
+            logger.error(f"Error stopping recording: {e}", exc_info=True)
+    
+    # Add shutdown callbacks
+    ctx.add_shutdown_callback(recording_stop_wrapper)
+    logger.info("[OK] Recording stop callback added (runs first)")
+    
+    ctx.add_shutdown_callback(cleanup_wrapper)
+    logger.info("[OK] Cleanup callback added (runs second)")
+
+    # --------------------------------------------------------
     # Step 2: Initialize AI components (STT, LLM, TTS, VAD)
     # --------------------------------------------------------
     try:
@@ -300,12 +517,21 @@ async def entrypoint(ctx: agents.JobContext):
         )
         
         logger.info("Starting agent session...")
+        
+        # Track session start time for duration calculation
+        session_start_time = datetime.utcnow()
+        logger.info(f"Session start time recorded: {session_start_time.isoformat()}")
+        
         await session.start(
             room=ctx.room,
             agent=assistant,
             room_input_options=room_options
         )
         logger.info("[OK] Agent session started successfully")
+        
+        # Start recording after session is started
+        logger.info("Initiating call recording...")
+        asyncio.create_task(start_recording())
         
     except Exception as e:
         logger.error(f"[ERROR] Failed to start agent session: {e}", exc_info=True)
@@ -339,7 +565,7 @@ async def entrypoint(ctx: agents.JobContext):
 def run_agent():
     """Run the inbound agent worker."""
     logger.info("=" * 60)
-    logger.info("🚀 RUN_AGENT CALLED - Starting LiveKit Inbound Agent CLI")
+    logger.info("RUN_AGENT CALLED - Starting LiveKit Inbound Agent CLI")
     logger.info("=" * 60)
     
     logger.info("Mode: AUTO-ACCEPT all incoming SIP calls")
@@ -360,7 +586,7 @@ def run_agent():
         agents.cli.run_app(worker_options)
         logger.info("Agent CLI exited normally")
     except KeyboardInterrupt:
-        logger.info("\n👋 Agent stopped by user (Ctrl+C)")
+        logger.info("\nAgent stopped by user (Ctrl+C)")
     except Exception as e:
         logger.error(f"[ERROR] Fatal error in run_agent: {e}", exc_info=True)
         raise
