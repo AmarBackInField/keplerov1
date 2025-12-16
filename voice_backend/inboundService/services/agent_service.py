@@ -4,6 +4,7 @@ import sys
 import asyncio
 from datetime import datetime
 from pathlib import Path
+from pymongo import MongoClient
 
 # Add project root to Python path to import RAGService
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..'))
@@ -83,10 +84,13 @@ if not LIVEKIT_URL or not LIVEKIT_API_KEY or not LIVEKIT_API_SECRET:
 # Simple Assistant class
 # ------------------------------------------------------------
 class Assistant(Agent):
-    def __init__(self, instructions: str = None) -> None:
+    def __init__(self, instructions: str = None, agent_config: dict = None) -> None:
         if instructions is None:
             instructions = AGENT_INSTRUCTIONS or "You are a helpful voice AI assistant of Aistein."
         logger.info(f"Agent initialized with instructions: {instructions[:100]}...")
+        
+        # Store agent config for use in tools
+        self.agent_config = agent_config or {}
         
         # Initialize RAG service with required credentials
         qdrant_url = os.getenv("QDRANT_URL")
@@ -163,8 +167,7 @@ class Assistant(Agent):
     @function_tool
     async def knowledge_base_search(self, query: str) -> str:
         """
-        Search in the entire knowledge base for information. Use this when user asks specific questions.
-        This searches ALL documents in main_collection without filtering by specific collections.
+        Search in the knowledge base for information. Use this when user asks specific questions.
         The agent will say 'Let me check' before calling this.
         
         Args:
@@ -181,12 +184,18 @@ class Assistant(Agent):
             return acknowledgment + "I'm sorry, the knowledge base is not available right now."
         
         try:
-            logger.info("Searching across ALL documents in main_collection (no collection filter)")
+            # Get collection_names from agent_config
+            collection_names = self.agent_config.get('collections', None)
             
-            # Perform search without collection filter (searches all documents)
+            if collection_names:
+                logger.info(f"Searching in specific collections: {collection_names}")
+            else:
+                logger.info("Searching across ALL documents in main_collection (no collection filter)")
+            
+            # Perform search with collections from config
             search_results = self.rag_service.retrieval_based_search(
                 query=query,
-                collections=None,  # No filter = search all documents
+                collections=collection_names,
                 top_k=3
             )
             
@@ -243,6 +252,35 @@ async def entrypoint(ctx: agents.JobContext):
     caller_number = None  # Who is calling
     organisation_id = None  # Organization ID for multi-tenant tracking
 
+    # --------------------------------------------------------
+    # Fetch agent configuration from MongoDB
+    # --------------------------------------------------------
+    agent_config = {}
+    try:
+        mongodb_uri = os.getenv("MONGODB_URI")
+        if mongodb_uri:
+            logger.info("Fetching agent configuration from MongoDB...")
+            mongo_client = MongoClient(mongodb_uri)
+            db = mongo_client["IslandAI"]
+            collection = db["inbound-agent-config"]
+            
+            # Fetch the single document containing agent config
+            agent_config = collection.find_one()
+            
+            if agent_config:
+                logger.info(f"✓ Agent config loaded: voice_id={agent_config.get('voice_id', 'N/A')}, "
+                           f"language={agent_config.get('language', 'N/A')}")
+                logger.info(f"✓ Agent instruction preview: {agent_config.get('agent_instruction', 'N/A')[:100]}...")
+            else:
+                logger.warning("⚠️ No agent config found in MongoDB, using defaults")
+            
+            mongo_client.close()
+        else:
+            logger.warning("⚠️ MONGODB_URI not set, using default agent configuration")
+    except Exception as config_error:
+        logger.error(f"Error loading agent config from MongoDB: {config_error}", exc_info=True)
+        logger.info("Continuing with default configuration...")
+    
     # --------------------------------------------------------
     # Step 1: Connect to room
     # --------------------------------------------------------
@@ -559,24 +597,27 @@ async def entrypoint(ctx: agents.JobContext):
     try:
         logger.info("Initializing AI components...")
         
-        # Initialize STT (Deepgram)
+        # Initialize STT (Deepgram) with language from MongoDB config
+        stt_language = agent_config.get('language', "en")
         stt_instance = deepgram.STT(
             model="nova-2-general",
-            language="en"
+            language=stt_language
         )
-        logger.info("[OK] STT initialized (Deepgram nova-2-general)")
+        logger.info(f"[OK] STT initialized (Deepgram nova-2-general) - Language: {stt_language}")
         
         # Initialize LLM (OpenAI)
         llm_instance = openai.LLM(model="gpt-4o-mini")
         logger.info("[OK] LLM initialized (gpt-4o-mini)")
         
-        # Initialize TTS (ElevenLabs)
+        # Initialize TTS (ElevenLabs) with config from MongoDB
+        tts_voice_id = agent_config.get('voice_id', "bIHbv24MWmeRgasZH58o")
+        tts_language = agent_config.get('language', "en")
         tts_instance = elevenlabs.TTS(
             base_url="https://api.eu.residency.elevenlabs.io/v1",
-            voice_id="bIHbv24MWmeRgasZH58o",
-            language="en",
+            voice_id=tts_voice_id,
+            language=tts_language,
         )
-        logger.info("[OK] TTS initialized (ElevenLabs)")
+        logger.info(f"[OK] TTS initialized (ElevenLabs) - Voice: {tts_voice_id}, Language: {tts_language}")
         
         # Initialize VAD (Silero)
         vad_instance = silero.VAD.load()
@@ -601,7 +642,9 @@ async def entrypoint(ctx: agents.JobContext):
     # --------------------------------------------------------
     try:
         logger.info("Creating Assistant instance...")
-        assistant = Assistant()
+        # Use agent_instruction from MongoDB config if available
+        agent_instructions = agent_config.get('agent_instruction', AGENT_INSTRUCTIONS)
+        assistant = Assistant(instructions=agent_instructions, agent_config=agent_config)
         
         logger.info("Configuring room input options...")
         room_options = RoomInputOptions(
@@ -633,7 +676,8 @@ async def entrypoint(ctx: agents.JobContext):
     # Step 4: Send greeting
     # --------------------------------------------------------
     try:
-        greeting_message = "Hello, I'm your AI assistant. How can I help you today?"
+        # Use greeting from config if available, otherwise use default
+        greeting_message = agent_config.get('greeting_message', "Hello, I'm your AI assistant calling from Aistein. How can I help you today?")
         logger.info(f"Sending greeting: '{greeting_message}'")
         
         await session.say(greeting_message, allow_interruptions=True)
