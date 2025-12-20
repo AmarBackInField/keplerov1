@@ -320,21 +320,17 @@ class Assistant(Agent):
         else:
             logger.info("RAG will search ALL collections (no filter)")
         
-        # Initialize RAG service with required credentials
-        qdrant_url = os.getenv("QDRANT_URL")
-        qdrant_api_key = os.getenv("QDRANT_API_KEY")
+        # Initialize RAG service with required credentials (FAISS-based)
         openai_api_key = os.getenv("OPENAI_API_KEY")
         
-        if qdrant_url and qdrant_api_key and openai_api_key:
+        if openai_api_key:
             self.rag_service = RAGService(
-                qdrant_url=qdrant_url,
-                qdrant_api_key=qdrant_api_key,
                 openai_api_key=openai_api_key
             )
-            logger.info("RAG service initialized successfully")
+            logger.info("RAG service initialized successfully (FAISS-based)")
         else:
             self.rag_service = None
-            logger.warning("RAG service not initialized - missing credentials")
+            logger.warning("RAG service not initialized - missing OpenAI API key")
         
         super().__init__(instructions=instructions)
 
@@ -909,22 +905,22 @@ async def entrypoint(ctx: agents.JobContext):
                 logger.info("Using Gemini with custom API key")
                 # Set the API key in environment for Google plugin
                 os.environ["GOOGLE_API_KEY"] = api_key
-                llm_instance = google.LLM(model="gemini-2.5-pro")
+                llm_instance = google.LLM(model="gemini-2.5-flash-lite")
                 logger.info("[OK] Gemini LLM initialized with custom API key")
             else:
                 logger.warning("Gemini provider selected but no API key provided, falling back to OpenAI")
-                llm_instance = openai.LLM(model=LLM_MODEL)
+                llm_instance = openai.LLM(model="gpt-5-nano")
                 logger.info("[OK] OpenAI LLM initialized (fallback)")
         else:  # default to OpenAI
             if api_key:
                 logger.info("Using OpenAI with custom API key")
                 # Set the API key in environment for OpenAI plugin
                 os.environ["OPENAI_API_KEY"] = api_key
-                llm_instance = openai.LLM(model="gpt-4.1-mini")
+                llm_instance = openai.LLM(model="gpt-5-nano")
                 logger.info("[OK] OpenAI LLM initialized with custom API key")
             else:
                 logger.info("Using default OpenAI configuration")
-                llm_instance = openai.LLM(model=LLM_MODEL)
+                llm_instance = openai.LLM(model="gpt-5-nano")
                 logger.info("[OK] OpenAI LLM initialized with default config")
 
         logger.info("Step 3: Initializing TTS (ElevenLabs)")
@@ -934,7 +930,8 @@ async def entrypoint(ctx: agents.JobContext):
                 voice_id=voice_id,
                 language=language,
                 model="eleven_flash_v2_5",
-                api_key=os.getenv("ELEVEN_API_KEY")
+                api_key=os.getenv("ELEVEN_API_KEY"),
+                streaming_latency=4
             )
         #     tts_instance = cartesia.TTS(
         #     model='sonic-3',

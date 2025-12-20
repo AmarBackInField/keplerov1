@@ -27,7 +27,7 @@ langchain-community
 langchain-core
 langchain-classic
 langchain-text-splitters
-
+faiss-cpu
 
 langgraph
 langgraph-checkpoint

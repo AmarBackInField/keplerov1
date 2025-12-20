@@ -174,8 +174,7 @@ async def data_ingestion(
     Data ingestion endpoint that accepts multiple sources simultaneously (URL, PDF, Excel).
     Processes all sources in parallel for faster ingestion.
     
-    All data is ingested into a single Qdrant collection "main_collection" with 
-    "source_collection" metadata set to the collection_name for logical separation.
+    All data is ingested into FAISS index with collection_name as metadata for logical separation.
     This allows querying from multiple logical collections efficiently.
     
     Args:
@@ -230,10 +229,9 @@ async def data_ingestion(
         total_sources = len(urls) + len(pdf_paths) + len(excel_paths)
         log_info(f"Starting parallel ingestion of {total_sources} source(s)...")
         
-        # Use async method for parallel ingestion
-        # Note: collection_name here is the logical collection name (stored in metadata)
-        result = await rag_service.load_data_to_qdrant_async(
-            logical_collection_name=collection_name,
+        # Use async method for parallel ingestion (FAISS-based)
+        result = await rag_service.load_data_async(
+            collection_name=collection_name,
             url_links=urls if urls else None,
             pdf_files=pdf_paths if pdf_paths else None,
             excel_files=excel_paths if excel_paths else None
@@ -282,6 +280,9 @@ async def create_collection(request: CreateCollectionRequest):
     """
     Create collection endpoint.
     
+    Note: FAISS doesn't require explicit collection creation. Collections are created 
+    automatically when data is ingested. This endpoint is maintained for API compatibility.
+    
     Args:
         request: CreateCollectionRequest containing collection_name
         
@@ -289,25 +290,33 @@ async def create_collection(request: CreateCollectionRequest):
         StatusResponse with creation status
     """
     try:
-        log_info(f"Create collection request for: '{request.collection_name}'")
-        rag_service.create_collection(collection_name=request.collection_name)
-        log_info(f"Successfully created collection: '{request.collection_name}'")
+        log_info(f"Create collection request for: '{request.collection_name}' (FAISS auto-creates collections)")
+        
+        # FAISS doesn't need explicit collection creation
+        # Collections are created automatically during data ingestion
+        log_info(f"Collection '{request.collection_name}' will be created automatically on first data ingestion")
         
         return StatusResponse(
             status="success",
-            message=f"Collection '{request.collection_name}' created successfully",
-            details={"vector_size": 1536, "distance_metric": "cosine"}
+            message=f"Collection '{request.collection_name}' ready (FAISS auto-creates on ingestion)",
+            details={
+                "note": "FAISS collections are created automatically during data ingestion",
+                "storage": "FAISS local vector database"
+            }
         )
     
     except Exception as e:
-        log_exception(f"Error creating collection '{request.collection_name}': {str(e)}")
+        log_exception(f"Error in create collection endpoint: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Create collection error: {str(e)}")
 
 
 @router.post("/delete_collection", response_model=StatusResponse)
 async def delete_collection(request: DeleteCollectionRequest):
     """
-    Delete collection endpoint.
+    Delete collection endpoint - removes all documents from a specific collection.
+    
+    Note: FAISS doesn't support efficient deletion, so the index will be rebuilt
+    without the specified collection's vectors.
     
     Args:
         request: DeleteCollectionRequest containing collection_name
@@ -317,14 +326,34 @@ async def delete_collection(request: DeleteCollectionRequest):
     """
     try:
         log_info(f"Delete collection request for: '{request.collection_name}'")
+        
+        # Check if collection exists
+        stats = rag_service.get_stats()
+        collections = stats.get("collections", {})
+        
+        if request.collection_name not in collections:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Collection '{request.collection_name}' not found. Available collections: {list(collections.keys())}"
+            )
+        
+        docs_count = collections[request.collection_name]
+        
+        # Delete the collection
         rag_service.delete_collection(collection_name=request.collection_name)
-        log_info(f"Successfully deleted collection: '{request.collection_name}'")
+        log_info(f"Successfully deleted collection: '{request.collection_name}' ({docs_count} documents)")
         
         return StatusResponse(
             status="success",
-            message=f"Collection '{request.collection_name}' deleted successfully"
+            message=f"Collection '{request.collection_name}' deleted successfully",
+            details={
+                "collection_name": request.collection_name,
+                "documents_removed": docs_count
+            }
         )
     
+    except HTTPException:
+        raise
     except Exception as e:
         log_exception(f"Error deleting collection '{request.collection_name}': {str(e)}")
         raise HTTPException(status_code=500, detail=f"Delete collection error: {str(e)}")
@@ -334,34 +363,70 @@ async def delete_collection(request: DeleteCollectionRequest):
 async def ensure_indexes(collection_name: str = "main_collection"):
     """
     Ensure all required payload indexes exist on the collection.
-    This endpoint is useful for fixing existing collections that were created
-    before the multi-collection feature was added.
     
-    Creates a keyword index on 'source_collection' field for efficient filtering.
+    Note: FAISS doesn't use payload indexes like Qdrant. This endpoint is maintained 
+    for API compatibility but has no effect with FAISS.
     
     Args:
-        collection_name: Name of the collection (default: "main_collection")
+        collection_name: Name of the collection (ignored for FAISS)
         
     Returns:
-        StatusResponse with index creation status
+        StatusResponse with index status
         
     Example:
         POST /rag/ensure_indexes?collection_name=main_collection
     """
     try:
-        log_info(f"Ensuring payload indexes for collection: '{collection_name}'")
-        result = rag_service.ensure_payload_indexes(collection_name)
-        log_info(f"Successfully ensured indexes for collection: '{collection_name}'")
+        log_info(f"Ensure indexes request (not applicable for FAISS)")
         
         return StatusResponse(
             status="success",
-            message=result["message"],
-            details=result
+            message="FAISS doesn't require payload indexes (maintained for API compatibility)",
+            details={
+                "note": "FAISS uses flat index structure without payload indexes",
+                "storage": "FAISS local vector database"
+            }
         )
     
     except Exception as e:
-        log_exception(f"Error ensuring indexes for collection '{collection_name}': {str(e)}")
+        log_exception(f"Error in ensure indexes endpoint: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Ensure indexes error: {str(e)}")
+
+
+@router.get("/collections")
+async def list_collections():
+    """
+    Get list of all collections and their document counts.
+    
+    Returns:
+        Dictionary with collection names and their respective document counts
+    
+    Example Response:
+        {
+            "status": "success",
+            "total_collections": 3,
+            "collections": {
+                "langchain": 150,
+                "insurance_docs": 75,
+                "product_info": 200
+            }
+        }
+    """
+    try:
+        stats = rag_service.get_stats()
+        collections = stats.get("collections", {})
+        
+        log_info(f"Found {len(collections)} collections")
+        
+        return {
+            "status": "success",
+            "total_collections": len(collections),
+            "collections": collections
+        }
+        
+    except Exception as e:
+        log_exception(f"Error listing collections: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to list collections: {str(e)}")
 
 
 @router.get("/conversation_history/{thread_id}")

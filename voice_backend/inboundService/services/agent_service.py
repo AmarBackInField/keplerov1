@@ -73,8 +73,7 @@ logger.info(f"LIVEKIT_API_SECRET: {'SET' if LIVEKIT_API_SECRET else 'NOT SET'}")
 logger.info(f"OPENAI_API_KEY: {'SET' if os.getenv('OPENAI_API_KEY') else 'NOT SET'}")
 logger.info(f"DEEPGRAM_API_KEY: {'SET' if os.getenv('DEEPGRAM_API_KEY') else 'NOT SET'}")
 logger.info(f"ELEVENLABS_API_KEY: {'SET' if os.getenv('ELEVEN_API_KEY') else 'NOT SET'}")
-logger.info(f"QDRANT_URL: {'SET' if os.getenv('QDRANT_URL') else 'NOT SET'}")
-logger.info(f"QDRANT_API_KEY: {'SET' if os.getenv('QDRANT_API_KEY') else 'NOT SET'}")
+logger.info(f"RAG Storage: FAISS (local vector database)")
 logger.info(f"TRANSFER_NUMBER: {TRANSFER_NUMBER}")
 logger.info(f"MONGODB_URI: {'SET' if os.getenv('MONGODB_URI') else 'NOT SET'}")
 logger.info("Multi-Tenant Mode: Agent config loaded per called number from MongoDB")
@@ -99,21 +98,17 @@ class Assistant(Agent):
         # Store agent config for use in tools
         self.agent_config = agent_config or {}
         
-        # Initialize RAG service with required credentials
-        qdrant_url = os.getenv("QDRANT_URL")
-        qdrant_api_key = os.getenv("QDRANT_API_KEY")
+        # Initialize RAG service with required credentials (FAISS-based)
         openai_api_key = os.getenv("OPENAI_API_KEY")
         
-        if qdrant_url and qdrant_api_key and openai_api_key:
+        if openai_api_key:
             self.rag_service = RAGService(
-                qdrant_url=qdrant_url,
-                qdrant_api_key=qdrant_api_key,
                 openai_api_key=openai_api_key
             )
-            logger.info("RAG service initialized successfully")
+            logger.info("RAG service initialized successfully (FAISS-based)")
         else:
             self.rag_service = None
-            logger.warning("RAG service not initialized - missing credentials")
+            logger.warning("RAG service not initialized - missing OpenAI API key")
         
         super().__init__(instructions=instructions)
 
@@ -203,7 +198,7 @@ class Assistant(Agent):
             search_results = self.rag_service.retrieval_based_search(
                 query=query,
                 collections=collection_names,
-                top_k=3
+                top_k=1
             )
             
             # Format results into a readable answer
@@ -463,7 +458,7 @@ async def entrypoint(ctx: agents.JobContext):
             # Validate GCS configuration
             gcs_bucket = os.getenv("GCS_BUCKET_NAME")
             gcs_credentials_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
-            # gcs_credentials_json = os.getenv("GCP_CREDENTIALS_JSON")
+            gcs_credentials_json = os.getenv("GCP_CREDENTIALS_JSON")
             
             if not gcs_bucket:
                 logger.warning("GCS_BUCKET_NAME not set - skipping recording")
@@ -698,9 +693,13 @@ async def entrypoint(ctx: agents.JobContext):
         logger.info(f"✓ STT initialized (Deepgram nova-2-general) - Language: {stt_language}")
         
         # Initialize LLM (OpenAI)
-        logger.debug("Initializing LLM (OpenAI gpt-4o-mini)")
-        llm_instance = openai.LLM(model="gpt-4o-mini")
-        logger.info("✓ LLM initialized (gpt-4o-mini)")
+        logger.debug("Initializing LLM (Google Gemini 2.5 Flash Lite)")
+        # llm_instance = openai.LLM(model="gpt-4o-mini")
+        llm_instance = google.LLM(
+        model="gemini-2.5-flash-lite",
+        api_key=os.getenv("GOOGLE_API_KEY"),
+    )
+        logger.info("✓ LLM initialized (Google Gemini 2.5 Flash Lite)")
         
         # Initialize TTS (ElevenLabs) with config from MongoDB
         tts_voice_id = agent_config.get('voice_id', "bIHbv24MWmeRgasZH58o")
@@ -709,7 +708,10 @@ async def entrypoint(ctx: agents.JobContext):
         tts_instance = elevenlabs.TTS(
             base_url="https://api.eu.residency.elevenlabs.io/v1",
             voice_id=tts_voice_id,
+            api_key=os.getenv("ELEVEN_API_KEY"),
             language=tts_language,
+            model="eleven_flash_v2_5",
+            streaming_latency=4
         )
         logger.info(f"✓ TTS initialized (ElevenLabs) - Voice: {tts_voice_id}, Language: {tts_language}")
         
