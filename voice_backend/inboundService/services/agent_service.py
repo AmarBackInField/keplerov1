@@ -24,7 +24,7 @@ from livekit.agents import (
     JobRequest,
     AutoSubscribe
 )
-from livekit.plugins import openai, deepgram, noise_cancellation, silero, elevenlabs
+from livekit.plugins import openai, deepgram, noise_cancellation, silero, elevenlabs,google
 from dotenv import load_dotenv
 from RAGService import RAGService
 
