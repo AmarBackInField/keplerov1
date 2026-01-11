@@ -117,13 +117,18 @@ async def chat(request: ChatRequest):
         
         # Run the RAG workflow (retrieve + generate) with multiple collections support
         log_info(f"Using provider: {request.provider}, Custom API key provided: {bool(request.api_key)}")
+        
+        # Add elaboration instruction to system prompt
+        elaboration_instruction = "\n\nIMPORTANT: Provide detailed, elaborate responses with comprehensive explanations. Continue elaborating until the user explicitly says 'don't elaborate' or asks for shorter responses."
+        enhanced_system_prompt = (request.system_prompt or "") + elaboration_instruction
+        
         result = rag_workflow.run(
             query=request.query,
             collection_name=request.collection_name,  # For backward compatibility
             collection_names=collections,  # New: multiple collections
             top_k=request.top_k,
             thread_id=request.thread_id,
-            system_prompt=request.system_prompt,
+            system_prompt=enhanced_system_prompt,
             provider=request.provider,
             api_key=request.api_key
         )
