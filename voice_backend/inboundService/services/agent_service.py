@@ -281,7 +281,9 @@ async def entrypoint(ctx: agents.JobContext):
         speed=1.1
     )
 
-    llm_instance = google.LLM(model="gemini-2.5-flash")
+    # llm_instance = google.LLM(model="gemini-2.5-flash")
+    # 4. Initialize LLM (GPT-4o-mini - more reliable)
+    llm_instance = openai.LLM(model="gpt-4o-mini", temperature=0.3)
 
     # 4. Configure Session with Aggressive VAD
     session = AgentSession(
@@ -333,15 +335,21 @@ async def entrypoint(ctx: agents.JobContext):
         """
         nonlocal egress_id
         if not egress_id:
+            logger.warning("stop_recording called but egress_id is None - recording may not have started")
             return
+        
+        logger.info(f"Attempting to stop recording with egress_id: {egress_id}")
             
         try:
             # Fetch the current status first to avoid stopping a failed egress
             egress_info = await ctx.api.egress.list_egress(api.ListEgressRequest(egress_id=egress_id))
             if not egress_info or len(egress_info.items) == 0:
+                logger.warning(f"No egress info found for egress_id: {egress_id}")
                 return
 
             status = egress_info.items[0].status
+            logger.info(f"Egress {egress_id} current status: {status}")
+            
             # Only attempt to stop if it's active or starting
             if status in [api.EgressStatus.EGRESS_STARTING, api.EgressStatus.EGRESS_ACTIVE]:
                 await ctx.api.egress.stop_egress(api.StopEgressRequest(egress_id=egress_id))
@@ -350,17 +358,13 @@ async def entrypoint(ctx: agents.JobContext):
                 logger.warning(f"Egress {egress_id} is in state {status}, skipping stop request.")
                 
         except Exception as e:
-            logger.error(f"Error during egress cleanup: {e}")
+            logger.error(f"Error during egress cleanup for egress_id {egress_id}: {e}")
 
     
 
     async def cleanup_and_save():
-        """Final cleanup: Stop recording and save transcript."""
+        """Save transcript and metadata to MongoDB."""
         try:
-            # 1. Stop recording first while API is still available
-            await stop_recording()
-            
-            # 2. Save transcript and metadata
             if hasattr(session, "history"):
                 transcript_data = session.history.to_dict()
                 duration = int((datetime.utcnow() - session_start_time).total_seconds())
@@ -390,7 +394,8 @@ async def entrypoint(ctx: agents.JobContext):
         except Exception as e:
             logger.error(f"Cleanup failed: {e}")
 
-    # Register shutdown callbacks
+    # Register shutdown callbacks (stop_recording runs first, then cleanup_and_save)
+    ctx.add_shutdown_callback(lambda: asyncio.create_task(stop_recording()))
     ctx.add_shutdown_callback(lambda: asyncio.create_task(cleanup_and_save()))
 
     # 6. Start Session
