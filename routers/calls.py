@@ -5,6 +5,7 @@ Outbound call-related API endpoints
 import os
 import asyncio
 import json
+import httpx
 from fastapi import APIRouter, HTTPException
 from typing import Optional
 from pathlib import Path
@@ -757,6 +758,248 @@ async def create_dispatch_rule(sip_trunk_id: str, name: str, agent_name: str):
         raise HTTPException(
             status_code=500,
             detail=f"Dispatch rule creation error: {str(e)}"
+        )
+
+
+@router.get("/list-sip-trunks")
+async def list_sip_trunks():
+    """
+    List all SIP trunks (both outbound and inbound) from LiveKit.
+    
+    This endpoint retrieves all configured SIP trunks to help you manage your trunks
+    and find trunk IDs for deletion or other operations.
+    
+    Returns:
+        Dictionary with outbound and inbound trunk lists
+    
+    Example Response:
+        {
+            "status": "success",
+            "outbound_trunks": [
+                {
+                    "trunk_id": "ST_xxxxx",
+                    "name": "My Outbound Trunk",
+                    "phone_number": "+1234567890"
+                }
+            ],
+            "inbound_trunks": [
+                {
+                    "trunk_id": "ST_yyyyy",
+                    "name": "My Inbound Trunk",
+                    "phone_numbers": ["+0987654321"]
+                }
+            ]
+        }
+    """
+    try:
+        log_info("Fetching all SIP trunks from LiveKit...")
+        
+        # Get LiveKit credentials
+        livekit_url = os.getenv("LIVEKIT_URL")
+        livekit_api_key = os.getenv("LIVEKIT_API_KEY")
+        livekit_api_secret = os.getenv("LIVEKIT_API_SECRET")
+        
+        if not all([livekit_url, livekit_api_key, livekit_api_secret]):
+            log_error("Missing LiveKit credentials")
+            raise HTTPException(
+                status_code=500,
+                detail="LiveKit credentials not configured"
+            )
+        
+        # Initialize LiveKit API
+        lk = api.LiveKitAPI(
+            url=livekit_url,
+            api_key=livekit_api_key,
+            api_secret=livekit_api_secret
+        )
+        
+        try:
+            from livekit.protocol import sip
+            
+            outbound_trunks = []
+            inbound_trunks = []
+            
+            # List outbound trunks
+            try:
+                outbound_list_request = sip.ListSIPTrunkRequest()
+                outbound_response = await lk.sip.list_sip_trunk(outbound_list_request)
+                
+                for trunk in outbound_response.items:
+                    outbound_trunks.append({
+                        "trunk_id": trunk.sip_trunk_id,
+                        "name": trunk.name if hasattr(trunk, 'name') else "N/A",
+                        "outbound_number": trunk.outbound_number if hasattr(trunk, 'outbound_number') else "N/A",
+                        "outbound_address": trunk.outbound_address if hasattr(trunk, 'outbound_address') else "N/A"
+                    })
+                log_info(f"✓ Listed {len(outbound_trunks)} outbound trunk(s)")
+            except Exception as e:
+                log_warning(f"Could not list outbound trunks: {str(e)}")
+            
+            # List inbound trunks
+            try:
+                inbound_list_request = sip.ListSIPInboundTrunkRequest()
+                inbound_response = await lk.sip.list_sip_inbound_trunk(inbound_list_request)
+                
+                for trunk in inbound_response.items:
+                    inbound_trunks.append({
+                        "trunk_id": trunk.sip_trunk_id,
+                        "name": trunk.name if hasattr(trunk, 'name') else "N/A",
+                        "phone_numbers": list(trunk.numbers) if hasattr(trunk, 'numbers') else []
+                    })
+                log_info(f"✓ Listed {len(inbound_trunks)} inbound trunk(s)")
+            except Exception as e:
+                log_warning(f"Could not list inbound trunks: {str(e)}")
+            
+            await lk.aclose()
+            
+            log_info(f"✓ Total: {len(outbound_trunks)} outbound trunk(s) and {len(inbound_trunks)} inbound trunk(s)")
+            
+            return {
+                "status": "success",
+                "message": f"Found {len(outbound_trunks)} outbound and {len(inbound_trunks)} inbound trunk(s)",
+                "total_outbound": len(outbound_trunks),
+                "total_inbound": len(inbound_trunks),
+                "outbound_trunks": outbound_trunks,
+                "inbound_trunks": inbound_trunks
+            }
+            
+        finally:
+            await lk.aclose()
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        log_exception(f"Error listing SIP trunks: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"SIP trunk listing error: {str(e)}"
+        )
+
+
+@router.delete("/delete-sip-trunk", response_model=StatusResponse)
+async def delete_sip_trunk(trunk_id: str, trunk_type: str = "outbound"):
+    """
+    Delete a SIP trunk from LiveKit.
+    
+    This endpoint removes a SIP trunk configuration from LiveKit. Use this to clean up
+    unused trunks or remove outdated configurations.
+    
+    Args:
+        trunk_id: The LiveKit SIP trunk ID to delete
+        trunk_type: Type of trunk - "outbound" or "inbound" (default: "outbound")
+    
+    Returns:
+        StatusResponse with deletion status
+    
+    Example:
+        DELETE /calls/delete-sip-trunk?trunk_id=ST_xxxxx&trunk_type=outbound
+    """
+    try:
+        log_info(f"======================================")
+        log_info(f"  SIP TRUNK DELETION STARTED")
+        log_info(f"======================================")
+        log_info(f"Deleting {trunk_type} SIP trunk: {trunk_id}")
+        
+        # Get LiveKit credentials
+        livekit_url = os.getenv("LIVEKIT_URL")
+        livekit_api_key = os.getenv("LIVEKIT_API_KEY")
+        livekit_api_secret = os.getenv("LIVEKIT_API_SECRET")
+        
+        if not all([livekit_url, livekit_api_key, livekit_api_secret]):
+            log_error("Missing LiveKit credentials")
+            raise HTTPException(
+                status_code=500,
+                detail="LiveKit credentials not configured"
+            )
+        
+        # Initialize LiveKit API
+        lk = api.LiveKitAPI(
+            url=livekit_url,
+            api_key=livekit_api_key,
+            api_secret=livekit_api_secret
+        )
+        
+        try:
+            from livekit.api.sip_service import DeleteSIPTrunkRequest
+            from livekit.api import AccessToken
+            
+            # Try using SDK method first (works for both inbound and outbound in newer versions)
+            log_info(f"Attempting to delete {trunk_type} trunk using SDK method...")
+            try:
+                delete_request = DeleteSIPTrunkRequest(sip_trunk_id=trunk_id)
+                await lk.sip.delete_trunk(delete_request)
+                log_info(f"✓ {trunk_type.capitalize()} trunk deleted via SDK: {trunk_id}")
+            except Exception as sdk_error:
+                log_warning(f"SDK deletion failed: {str(sdk_error)}")
+                
+                if trunk_type.lower() == "inbound":
+                    # Fallback to REST API for inbound trunks
+                    log_info(f"Trying REST API as fallback for inbound trunk...")
+                    
+                    token = AccessToken(livekit_api_key, livekit_api_secret)
+                    token.with_grants(api.VideoGrants(room_admin=True))
+                    jwt_token = token.to_jwt()
+                    
+                    base_url = livekit_url.replace("wss://", "https://").replace("ws://", "http://")
+                    url = f"{base_url}/sip/inbound/{trunk_id}"
+                    
+                    headers = {
+                        "Authorization": f"Bearer {jwt_token}",
+                        "Content-Type": "application/json"
+                    }
+                    
+                    async with httpx.AsyncClient() as client:
+                        log_info(f"Sending DELETE request to: {url}")
+                        response = await client.delete(url, headers=headers)
+                        
+                        log_info(f"Response status: {response.status_code}")
+                        log_info(f"Response body: {response.text}")
+                        
+                        if response.status_code in [200, 204]:
+                            log_info(f"✓ Inbound trunk deleted via REST API: {trunk_id}")
+                        elif response.status_code == 404:
+                            log_error(f"Trunk not found: {trunk_id}")
+                            raise HTTPException(status_code=404, detail=f"Trunk '{trunk_id}' not found")
+                        else:
+                            log_error(f"Delete failed with status {response.status_code}: {response.text}")
+                            raise HTTPException(
+                                status_code=response.status_code,
+                                detail=f"Failed to delete trunk: {response.text}"
+                            )
+                else:
+                    # Re-raise the error for outbound trunks
+                    raise
+            
+            await lk.aclose()
+            
+            # Log summary
+            log_info(f"")
+            log_info(f"======================================")
+            log_info(f"  SIP TRUNK DELETED SUCCESSFULLY")
+            log_info(f"======================================")
+            log_info(f"Trunk ID:        {trunk_id}")
+            log_info(f"Trunk Type:      {trunk_type}")
+            log_info(f"======================================")
+            
+            return StatusResponse(
+                status="success",
+                message=f"{trunk_type.capitalize()} SIP trunk '{trunk_id}' deleted successfully",
+                details={
+                    "trunk_id": trunk_id,
+                    "trunk_type": trunk_type
+                }
+            )
+            
+        finally:
+            await lk.aclose()
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        log_exception(f"Error deleting SIP trunk: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"SIP trunk deletion error: {str(e)}"
         )
 
 
