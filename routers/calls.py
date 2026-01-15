@@ -55,6 +55,11 @@ async def outbound_call(request: OutboundCallRequest):
     1. Validates and initiates the outbound call
     2. Returns immediately with status and caller_id (room name)
     
+    MULTI-TENANT SUPPORT:
+    - If user_id is provided, creates/updates a user-specific config document
+    - If user_id is not provided, uses the default shared config (legacy mode)
+    - Each user_id gets isolated configuration for their calls
+    
     Args:
         request: OutboundCallRequest containing:
             - phone_number: Phone number with country code (e.g., +1234567890)
@@ -69,6 +74,7 @@ async def outbound_call(request: OutboundCallRequest):
             - api_key: Custom API key for the provider (optional)
             - collection_names: List of RAG collections to search (optional)
             - greeting_message: Custom greeting message for the call (optional)
+            - user_id: User ID for multi-tenant config isolation (optional)
         
     Returns:
         StatusResponse with call status and caller_id (room name)
@@ -79,6 +85,14 @@ async def outbound_call(request: OutboundCallRequest):
             "phone_number": "+1234567890",
             "name": "John Doe",
             "dynamic_instruction": "Ask about appointment"
+        }
+        
+        Multi-tenant call (user-specific config):
+        {
+            "phone_number": "+1234567890",
+            "name": "John Doe",
+            "dynamic_instruction": "Ask about appointment",
+            "user_id": "user_123"
         }
         
         With custom greeting:
@@ -168,9 +182,27 @@ async def outbound_call(request: OutboundCallRequest):
             if request.greeting_message:
                 update_doc["greeting_message"] = request.greeting_message
             
-            # Update the single document (upsert if it doesn't exist)
+            # MULTI-TENANT: Filter by user_id if provided, otherwise use default (empty filter)
+            if request.user_id:
+                # User-specific document: find by user_id, create if not exists
+                update_doc["user_id"] = request.user_id
+                filter_query = {"user_id": request.user_id}
+                log_info(f"Multi-tenant mode: Using user_id '{request.user_id}' for config lookup")
+                
+                # Check if document exists for this user
+                existing_doc = collection.find_one(filter_query)
+                if existing_doc:
+                    log_info(f"Found existing config for user_id '{request.user_id}', updating...")
+                else:
+                    log_info(f"No config found for user_id '{request.user_id}', creating new document...")
+            else:
+                # Legacy mode: use empty filter to match the single default document
+                filter_query = {"user_id": {"$exists": False}}  # Match documents without user_id (default config)
+                log_info("Using default config (no user_id provided)")
+            
+            # Update or create the document (upsert if it doesn't exist)
             result = collection.update_one(
-                {},  # Empty filter to match the single document
+                filter_query,
                 {"$set": update_doc},
                 upsert=True
             )
@@ -178,6 +210,8 @@ async def outbound_call(request: OutboundCallRequest):
             client.close()
             
             log_info(f"✓ MongoDB configuration updated successfully")
+            if request.user_id:
+                log_info(f"  - User ID (multi-tenant): {request.user_id}")
             log_info(f"  - Agent Instructions: {full_instruction[:100]}...")
             if request.name:
                 log_info(f"  - Caller Name: {request.name}")
@@ -206,24 +240,32 @@ async def outbound_call(request: OutboundCallRequest):
         
         log_info(f"Initiating call to formatted number: '{formatted_number}'")
         
-        # Make the outbound call and get room name
+        # Make the outbound call and get room name (pass user_id for multi-tenant)
         participant, room_name = await make_outbound_call(
             phone_number=formatted_number,
-            sip_trunk_id=request.sip_trunk_id
+            sip_trunk_id=request.sip_trunk_id,
+            user_id=request.user_id
         )
         
         log_info(f"Successfully initiated call to '{formatted_number}' for {request.name or 'caller'}")
         log_info(f"Room name (caller_id): {room_name}")
         
+        # Build response details
+        response_details = {
+            "caller_id": room_name,
+            "phone_number": formatted_number,
+            "original_input": request.phone_number,
+            "name": request.name
+        }
+        
+        # Add user_id to response if provided (multi-tenant mode)
+        if request.user_id:
+            response_details["user_id"] = request.user_id
+        
         return StatusResponse(
             status="success",
             message=f"Outbound call initiated to {formatted_number}" + (f" for {request.name}" if request.name else ""),
-            details={
-                "caller_id": room_name,
-                "phone_number": formatted_number,
-                "original_input": request.phone_number,
-                "name": request.name
-            }
+            details=response_details
         )
     
     except HTTPException:

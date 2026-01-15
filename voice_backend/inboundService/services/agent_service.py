@@ -134,7 +134,8 @@ async def send_smtp_email_async(to: str, subject: str, body: str, cc: Optional[s
 # --- Assistant Class ---
 
 class Assistant(Agent):
-    def __init__(self, instructions: str = None, agent_config: Dict[str, Any] = None) -> None:
+    def __init__(self, instructions: str = None, collections: List[str] = None, agent_config: Dict[str, Any] = None) -> None:
+        self.collections = collections or []  # FROM CONFIG
         self.agent_config = agent_config or {}
         openai_api_key = os.getenv("OPENAI_API_KEY")
         self.rag_service = RAGService(openai_api_key=openai_api_key) if openai_api_key else None
@@ -156,7 +157,7 @@ class Assistant(Agent):
                 asyncio.to_thread(
                     self.rag_service.retrieval_based_search,
                     query=user_query,
-                    collections=self.agent_config.get('collections'),
+                    collections=self.collections,  # FROM CONFIG
                     top_k=1
                 ),
                 timeout=0.85
@@ -261,29 +262,35 @@ async def entrypoint(ctx: agents.JobContext):
         col = db[INBOUND_CONFIG_COLLECTION]
         agent_config = await col.find_one({"calledNumber": f"+{called_number}"}) or {}
     
-    # 3. Initialize AI Components
-    stt_instance = deepgram.STT(model="nova-2-phonecall", language=agent_config.get('language', 'en'))
+    # Extract configurable parameters from MongoDB config
+    language = agent_config.get("language", "en")
+    agent_instruction = agent_config.get("agent_instruction", "You are a helpful assistant.")
+    collections = agent_config.get("collections", [])
+    voice_id = agent_config.get("voice_id", "21m00Tcm4TlvDq8ikWAM")  # Default: Rachel
     
-    # tts_instance = elevenlabs.TTS(
-    #     base_url="https://api.eu.residency.elevenlabs.io/v1",
-    #     voice_id=agent_config.get('voice_id', "2EiwWnXFnvU5JabPnv8n"),
-    #     api_key=os.getenv("ELEVEN_API_KEY"),
-    #     language=agent_config.get('language', 'en'),
-    #     model="eleven_flash_v2_5",
-    #     streaming_latency=4,
-    # )
-    # 3. Initialize TTS (Cartesia Sonic-3)
-    tts_instance = cartesia.TTS(
-        api_key="sk_car_5TjKemDoHphETZp64Tpv1Z",
-        model='sonic-3',
-        language=agent_config.get('language', 'en'),
-        voice=agent_config.get('voice_id', "f786b574-daa5-4673-aa0c-cbe3e8534c02"),
-        speed=1.1
+    logger.info(f"Config loaded for +{called_number}:")
+    logger.info(f"  - language: {language}")
+    logger.info(f"  - voice_id: {voice_id}")
+    logger.info(f"  - collections: {collections}")
+    logger.info(f"  - agent_instruction: {agent_instruction[:50]}...")
+    
+    # 3. Initialize AI Components
+    # Initialize STT (Deepgram Nova-3) - use language from config
+    stt_instance = deepgram.STT(model="nova-3", language=language, interim_results=True)
+    
+    # Initialize TTS (ElevenLabs - optimized for low latency) - use config values
+    tts_instance = elevenlabs.TTS(
+        base_url="https://api.eu.residency.elevenlabs.io/v1",
+        api_key=os.getenv("ELEVEN_API_KEY"),
+        model="eleven_flash_v2_5",  # Flash model = fastest (~150ms vs turbo ~250ms)
+        voice_id=voice_id,  # FROM CONFIG
+        language=language,  # FROM CONFIG
+        streaming_latency=3,  # 0 = lowest latency (was 1)
     )
 
-    # llm_instance = google.LLM(model="gemini-2.5-flash")
-    # 4. Initialize LLM (GPT-4o-mini - more reliable)
-    llm_instance = openai.LLM(model="gpt-4o-mini", temperature=0.3)
+    # Initialize LLM (Gemini 2.5 Flash)
+    llm_instance = google.LLM(model="gemini-2.5-flash", temperature=0.3)
+    
 
     # 4. Configure Session with Aggressive VAD
     session = AgentSession(
@@ -426,7 +433,8 @@ async def entrypoint(ctx: agents.JobContext):
 
     # 6. Start Session
     assistant = Assistant(
-        instructions=agent_config.get("agent_instruction", "You are a helpful assistant."),
+        instructions=agent_instruction,  # FROM CONFIG (extracted earlier)
+        collections=collections,  # FROM CONFIG (extracted earlier)
         agent_config=agent_config
     )
     
