@@ -94,7 +94,6 @@ class OutboundCallRequest(BaseModel):
     organisation_id: Optional[str] = None  # Organisation ID for multi-tenant tracking
     contact_number: Optional[str] = None  # Contact number for the caller (used for MongoDB record)
     greeting_message: Optional[str] = None  # Custom greeting message for the call
-    user_id: Optional[str] = None  # User ID for multi-tenant config (creates/updates user-specific document)
 
 
 # ============================================================================

@@ -95,28 +95,13 @@ logger = logging.getLogger("optimized_agent")
 
 # --- Optimized Utilities ---
 
-async def load_dynamic_config_async(user_id: str = None) -> Dict[str, Any]:
-    """
-    Asynchronous and cached loading of config from MongoDB.
-    
-    MULTI-TENANT SUPPORT:
-    - If user_id is provided, loads config specific to that user
-    - If user_id is not provided, loads default config (legacy mode)
-    
-    Args:
-        user_id: Optional user ID for multi-tenant config isolation
-    """
+async def load_dynamic_config_async() -> Dict[str, Any]:
+    """Asynchronous and cached loading of config from MongoDB."""
     global _DYNAMIC_CONFIG_CACHE, _CACHE_TIMESTAMP
     current_time = time.time()
     
-    # For multi-tenant, we need different cache keys per user
-    cache_key = user_id or "_default_"
-    
-    # Check if we have a cached config for this user/default
-    if isinstance(_DYNAMIC_CONFIG_CACHE, dict) and cache_key in _DYNAMIC_CONFIG_CACHE:
-        cached_data = _DYNAMIC_CONFIG_CACHE[cache_key]
-        if (current_time - cached_data.get('_timestamp', 0)) < CACHE_TTL:
-            return cached_data.get('config', {})
+    if _DYNAMIC_CONFIG_CACHE is not None and (current_time - _CACHE_TIMESTAMP) < CACHE_TTL:
+        return _DYNAMIC_CONFIG_CACHE
     
     client = get_async_mongo_client()
     if not client:
@@ -125,40 +110,17 @@ async def load_dynamic_config_async(user_id: str = None) -> Dict[str, Any]:
     try:
         db = client[MONGODB_DATABASE]
         collection = db[MONGODB_COLLECTION]
-        
-        # MULTI-TENANT: Filter by user_id if provided
-        if user_id:
-            filter_query = {"user_id": user_id}
-            logger.info(f"Loading config for user_id: {user_id}")
-        else:
-            # Legacy mode: get default config (without user_id field)
-            filter_query = {"user_id": {"$exists": False}}
-            logger.info("Loading default config (no user_id)")
-        
-        config_doc = await collection.find_one(filter_query)
+        config_doc = await collection.find_one()
         
         if config_doc:
             config_doc.pop('_id', None)
-            
-            # Initialize cache dict if needed
-            if not isinstance(_DYNAMIC_CONFIG_CACHE, dict):
-                _DYNAMIC_CONFIG_CACHE = {}
-            
-            # Cache with user-specific key
-            _DYNAMIC_CONFIG_CACHE[cache_key] = {
-                'config': config_doc,
-                '_timestamp': current_time
-            }
+            _DYNAMIC_CONFIG_CACHE = config_doc
+            _CACHE_TIMESTAMP = current_time
             return config_doc
-        else:
-            logger.warning(f"No config found for filter: {filter_query}")
     except Exception as e:
         logger.error(f"Async config load error: {e}")
     
-    # Return cached config if available
-    if isinstance(_DYNAMIC_CONFIG_CACHE, dict) and cache_key in _DYNAMIC_CONFIG_CACHE:
-        return _DYNAMIC_CONFIG_CACHE[cache_key].get('config', {})
-    return {}
+    return _DYNAMIC_CONFIG_CACHE or {}
 
 async def load_registered_tools_async() -> Dict[str, Any]:
     """Asynchronous loading of tools.json."""
@@ -247,16 +209,7 @@ class Assistant(Agent):
         job_ctx = get_job_context()
         if not job_ctx: return "error"
         
-        # MULTI-TENANT: Extract user_id from room metadata for config lookup
-        user_id = None
-        try:
-            if job_ctx.room.metadata:
-                room_metadata = json.loads(job_ctx.room.metadata)
-                user_id = room_metadata.get("user_id")
-        except json.JSONDecodeError:
-            pass
-        
-        config = await load_dynamic_config_async(user_id=user_id)
+        config = await load_dynamic_config_async()
         transfer_to = config.get("transfer_to", "+919911062767")
         if not transfer_to.startswith("tel:"): transfer_to = f"tel:{transfer_to}"
         
@@ -312,51 +265,45 @@ async def entrypoint(ctx: agents.JobContext):
     gcs_bucket = os.getenv("GCS_BUCKET") or os.getenv("GCS_BUCKET_NAME")
     session_start_time = datetime.utcnow()
     
-    # MULTI-TENANT: Extract user_id from room metadata
-    user_id = None
-    try:
-        if ctx.room.metadata:
-            room_metadata = json.loads(ctx.room.metadata)
-            user_id = room_metadata.get("user_id")
-            if user_id:
-                logger.info(f"Multi-tenant mode: user_id={user_id}")
-            else:
-                logger.info("Using default config (no user_id in room metadata)")
-    except json.JSONDecodeError as e:
-        logger.warning(f"Failed to parse room metadata: {e}")
-    
-    # 1. Parallelize Config & Tools Loading (pass user_id for multi-tenant)
-    config_task = asyncio.create_task(load_dynamic_config_async(user_id=user_id))
+    # 1. Parallelize Config & Tools Loading
+    config_task = asyncio.create_task(load_dynamic_config_async())
     tools_task = asyncio.create_task(load_registered_tools_async())
 
     # 5. Wait for Config
     dynamic_config = await config_task
     await tools_task
     
-    # Extract configurable parameters from MongoDB
-    tts_language = dynamic_config.get("tts_language", "en")
+    # Extract config parameters from MongoDB
+    tts_language = dynamic_config.get("tts_language", "it")
     voice_id = dynamic_config.get("voice_id", "21m00Tcm4TlvDq8ikWAM")  # Default: Rachel
+    escalation_condition = dynamic_config.get("escalation_condition", "")
     collection_names = dynamic_config.get("collection_names", [])
     greeting_message = dynamic_config.get("greeting_message", "")
+    agent_instructions = dynamic_config.get("agent_instructions", "You are a helpful assistant.")
     
-    logger.info(f"Config loaded - tts_language: {tts_language}, voice_id: {voice_id}, collections: {collection_names}")
-    if greeting_message:
-        logger.info(f"Greeting message: {greeting_message[:50]}...")
+    logger.info(f"Config loaded - TTS Language: {tts_language}, Voice ID: {voice_id}")
+    logger.info(f"Escalation Condition: {escalation_condition}")
+    logger.info(f"Collection Names: {collection_names}")
     
-    # 2. Initialize STT (Deepgram Nova-3) - use tts_language for STT as well
+    # 2. Initialize STT (Deepgram Nova-2) - use language from config
     stt_instance = deepgram.STT(model="nova-3", language=tts_language, interim_results=True)
     
-    # 3. Initialize TTS (ElevenLabs - optimized for low latency) - use config values
+    # 3. Initialize TTS (ElevenLabs - optimized for low latency) - use voice_id and language from config
     tts_instance = elevenlabs.TTS(
         base_url="https://api.eu.residency.elevenlabs.io/v1",
         api_key=os.getenv("ELEVEN_API_KEY"),
         model="eleven_flash_v2_5",  # Flash model = fastest (~150ms vs turbo ~250ms)
-        voice_id=voice_id,  # FROM CONFIG
-        language=tts_language,  # FROM CONFIG
+        voice=voice_id,
+        language=tts_language,
         streaming_latency=3,  # 0 = lowest latency (was 1)
     )
 
-    # 4. Initialize LLM (Gemini 2.5 Flash)
+    # # 4. Initialize LLM (GPT-4o-mini)
+    # llm_instance = google.LLM(model="gemini-2.5-flash")
+    # 4. Initialize LLM (GPT-4o-mini - more reliable)
+
+    # 4. Initialize LLM (GPT-4o-mini - more reliable)
+    # llm_instance = openai.LLM(model="gpt-4o-mini", temperature=0.3)
     llm_instance = google.LLM(model="gemini-2.5-flash", temperature=0.3)
     
     # 6. Configure Session with Aggressive VAD
@@ -465,8 +412,7 @@ async def entrypoint(ctx: agents.JobContext):
         try:
             if hasattr(session, "history"):
                 transcript_data = session.history.to_dict()
-                # MULTI-TENANT: Use user_id from room metadata (captured from entrypoint scope)
-                config = await load_dynamic_config_async(user_id=user_id)
+                config = await load_dynamic_config_async()
                 
                 duration = int((datetime.utcnow() - session_start_time).total_seconds())
                 metadata = {
@@ -476,10 +422,6 @@ async def entrypoint(ctx: agents.JobContext):
                 }
                 if gcs_bucket:
                     metadata["recording_url"] = f"https://storage.googleapis.com/{gcs_bucket}/calls/{ctx.room.name}.ogg"
-                
-                # Add user_id to metadata if present (for multi-tenant tracking)
-                if user_id:
-                    metadata["user_id"] = user_id
 
                 mongo_manager = get_mongodb_manager(MONGODB_URI)
                 if mongo_manager:
@@ -488,7 +430,7 @@ async def entrypoint(ctx: agents.JobContext):
                         caller_id=ctx.room.name,
                         name=config.get("caller_name", "Guest"),
                         contact_number=config.get("contact_number"),
-                        # organisation_id=config.get("organisation_id"),
+                        organisation_id=config.get("organisation_id"),
                         metadata=metadata
                     )
                     logger.info("Transcript saved successfully")
@@ -503,9 +445,16 @@ async def entrypoint(ctx: agents.JobContext):
     # 8. Connect and Start
     await ctx.connect()
     
+    # Build full instructions with escalation condition if provided
+    full_instructions = agent_instructions
+    if escalation_condition:
+        full_instructions += f"\n\nEscalation Condition: {escalation_condition}. When this condition is met, use the transfer_to_human tool to transfer the call."
+    
+    logger.info(f"Agent Instructions: {full_instructions[:200]}...")
+    
     assistant = Assistant(
-        instructions=dynamic_config.get("agent_instructions", "You are a helpful assistant."),
-        collection_names=collection_names  # FROM CONFIG (extracted earlier)
+        instructions=full_instructions,
+        collection_names=collection_names
     )
     
     await session.start(room=ctx.room, agent=assistant, room_input_options=RoomInputOptions(noise_cancellation=noise_cancellation.BVC()))
@@ -513,10 +462,8 @@ async def entrypoint(ctx: agents.JobContext):
     # Start recording in background
     asyncio.create_task(start_recording())
     
-    # 9. Immediate Greeting - use greeting_message from config (extracted earlier)
-    default_greeting = "Hi, this is Sarah from Islands AI. How can I help you today talk in italy only"
-    final_greeting = greeting_message if greeting_message else default_greeting
-    logger.info(f"Starting call with greeting: {final_greeting[:60]}...")
+    # 9. Immediate Greeting - use greeting from config
+    final_greeting = greeting_message if greeting_message else "Hi, this is Sarah from Islands AI. I'd like to share a few of our services with you - do you have a few minutes?"
     await session.generate_reply(instructions=final_greeting)
 
 def run_agent():

@@ -20,8 +20,7 @@ print("LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET:", LIVEKIT_URL, LIVEKIT_
 async def make_outbound_call(
     phone_number: str,
     sip_trunk_id: str = SIP_TRUNK_ID,
-    room_name: str = None,
-    user_id: str = None
+    room_name: str = None
 ):
     """
     Make an outbound call to the specified phone number.
@@ -31,7 +30,6 @@ async def make_outbound_call(
         phone_number: The phone number to call (e.g., "+1234567890")
         sip_trunk_id: SIP trunk ID
         room_name: Optional room name (generates unique one if not provided)
-        user_id: Optional user ID for multi-tenant config isolation
     
     Returns:
         tuple: (participant_info, room_name) if successful
@@ -48,19 +46,12 @@ async def make_outbound_call(
     print(f"📱 Phone Number: {phone_number}")
     print(f"🏠 Room Name: {room_name}")
     print(f"📡 SIP Trunk: {sip_trunk_id}")
-    if user_id:
-        print(f"👤 User ID (multi-tenant): {user_id}")
     print("=" * 60)
     print("LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET:", LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
     
     # Connect to LiveKit API
     print("Connecting to LiveKit API...")
     livekit_api = api.LiveKitAPI(api_key=LIVEKIT_API_KEY, api_secret=LIVEKIT_API_SECRET, url=LIVEKIT_URL)
-    
-    # Build room metadata with user_id for multi-tenant support
-    room_metadata = {"agent_name": "voice-assistant"}
-    if user_id:
-        room_metadata["user_id"] = user_id
     
     # Create the room first (optional but recommended)
     try:
@@ -70,7 +61,7 @@ async def make_outbound_call(
                 name=room_name,
                 empty_timeout=60,  # Room closes after 60 seconds if empty
                 max_participants=10,
-                metadata=json.dumps(room_metadata)
+                metadata=json.dumps({"agent_name": "voice-assistant"})
             )
         )
         print(f"✓ Room created: {room_name}")

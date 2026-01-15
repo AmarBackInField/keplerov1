@@ -134,8 +134,7 @@ async def send_smtp_email_async(to: str, subject: str, body: str, cc: Optional[s
 # --- Assistant Class ---
 
 class Assistant(Agent):
-    def __init__(self, instructions: str = None, collections: List[str] = None, agent_config: Dict[str, Any] = None) -> None:
-        self.collections = collections or []  # FROM CONFIG
+    def __init__(self, instructions: str = None, agent_config: Dict[str, Any] = None) -> None:
         self.agent_config = agent_config or {}
         openai_api_key = os.getenv("OPENAI_API_KEY")
         self.rag_service = RAGService(openai_api_key=openai_api_key) if openai_api_key else None
@@ -157,7 +156,7 @@ class Assistant(Agent):
                 asyncio.to_thread(
                     self.rag_service.retrieval_based_search,
                     query=user_query,
-                    collections=self.collections,  # FROM CONFIG
+                    collections=self.agent_config.get('collections'),
                     top_k=1
                 ),
                 timeout=0.85
@@ -262,17 +261,16 @@ async def entrypoint(ctx: agents.JobContext):
         col = db[INBOUND_CONFIG_COLLECTION]
         agent_config = await col.find_one({"calledNumber": f"+{called_number}"}) or {}
     
-    # Extract configurable parameters from MongoDB config
+    # Extract config parameters from MongoDB
     language = agent_config.get("language", "en")
-    agent_instruction = agent_config.get("agent_instruction", "You are a helpful assistant.")
-    collections = agent_config.get("collections", [])
     voice_id = agent_config.get("voice_id", "21m00Tcm4TlvDq8ikWAM")  # Default: Rachel
+    agent_instruction = agent_config.get("agent_instruction", "You are a helpful assistant.")
+    escalation_condition = agent_config.get("escalation_condition", "")
+    collection_names = agent_config.get("collections", [])  # Note: field name is 'collections' in DB
     
-    logger.info(f"Config loaded for +{called_number}:")
-    logger.info(f"  - language: {language}")
-    logger.info(f"  - voice_id: {voice_id}")
-    logger.info(f"  - collections: {collections}")
-    logger.info(f"  - agent_instruction: {agent_instruction[:50]}...")
+    logger.info(f"Config loaded for {called_number} - Language: {language}, Voice ID: {voice_id}")
+    logger.info(f"Escalation Condition: {escalation_condition}")
+    logger.info(f"Collection Names: {collection_names}")
     
     # 3. Initialize AI Components
     # Initialize STT (Deepgram Nova-3) - use language from config
@@ -283,12 +281,12 @@ async def entrypoint(ctx: agents.JobContext):
         base_url="https://api.eu.residency.elevenlabs.io/v1",
         api_key=os.getenv("ELEVEN_API_KEY"),
         model="eleven_flash_v2_5",  # Flash model = fastest (~150ms vs turbo ~250ms)
-        voice_id=voice_id,  # FROM CONFIG
-        language=language,  # FROM CONFIG
+        voice=voice_id,
+        language=language,
         streaming_latency=3,  # 0 = lowest latency (was 1)
     )
 
-    # Initialize LLM (Gemini 2.5 Flash)
+    # 4. Initialize LLM (Gemini 2.5 Flash)
     llm_instance = google.LLM(model="gemini-2.5-flash", temperature=0.3)
     
 
@@ -419,7 +417,7 @@ async def entrypoint(ctx: agents.JobContext):
                         caller_id=ctx.room.name,
                         name="Inbound Caller",
                         contact_number=f"+{caller_number}" if caller_number else None,
-                        organisation_id=agent_config.get("organisation_id"),
+                        # organisation_id=agent_config.get("organisation_id"),
                         metadata=metadata
                     )
                     logger.info("Transcript and metadata saved to MongoDB")
@@ -432,9 +430,18 @@ async def entrypoint(ctx: agents.JobContext):
     ctx.add_shutdown_callback(cleanup_and_save)
 
     # 6. Start Session
+    # Build full instructions with escalation condition if provided
+    full_instructions = agent_instruction
+    if escalation_condition:
+        full_instructions += f"\n\nEscalation Condition: {escalation_condition}. When this condition is met, use the transfer_to_human tool to transfer the call."
+    
+    logger.info(f"Agent Instructions: {full_instructions[:200]}...")
+    
+    # Update agent_config with extracted collection_names for RAG
+    agent_config['collections'] = collection_names
+    
     assistant = Assistant(
-        instructions=agent_instruction,  # FROM CONFIG (extracted earlier)
-        collections=collections,  # FROM CONFIG (extracted earlier)
+        instructions=full_instructions,
         agent_config=agent_config
     )
     
