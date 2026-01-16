@@ -17,6 +17,7 @@ from model import (
     CreateCollectionRequest,
     DeleteCollectionRequest,
     StatusResponse,
+    EcommerceCredentials,
 )
 
 router = APIRouter(prefix="/rag", tags=["RAG"])
@@ -26,6 +27,19 @@ router = APIRouter(prefix="/rag", tags=["RAG"])
 rag_service = None
 rag_workflow = None
 mongodb_manager = None
+
+# Import ecommerce tools
+try:
+    from voice_backend.outboundService.services.tool import EcommerceClient
+except ImportError:
+    # Placeholder for compatibility
+    class EcommerceClient:
+        def __init__(self, **kwargs): pass
+        async def get_products(self, limit=5): return "Ecommerce tools not available"
+        async def get_orders(self, limit=5): return "Ecommerce tools not available"
+
+# Import langchain tool decorator
+from langchain_core.tools import tool
 
 
 def init_rag_router(service, workflow, mongo_manager):
@@ -94,6 +108,7 @@ async def chat(request: ChatRequest):
     Stores chatbot instances and chat history in MongoDB.
     Supports multiple LLM providers (OpenAI, Gemini) with custom API keys.
     NOW SUPPORTS QUERYING FROM MULTIPLE COLLECTIONS!
+    SUPPORTS ECOMMERCE INTEGRATION (WooCommerce, Shopify, etc.)!
     
     Args:
         request: ChatRequest containing:
@@ -105,6 +120,7 @@ async def chat(request: ChatRequest):
             - system_prompt: Custom system prompt (optional)
             - provider: LLM provider ("openai" or "gemini", default: "openai")
             - api_key: Custom API key for the provider (optional, uses default if not provided)
+            - ecommerce_credentials: Credentials for ecommerce platform (optional)
         
     Returns:
         ChatResponse with generated answer, retrieved documents, and latency_ms
@@ -124,6 +140,18 @@ async def chat(request: ChatRequest):
             "provider": "openai",
             "top_k": 10
         }
+        
+        With ecommerce integration (WooCommerce):
+        {
+            "query": "What products do you have in stock?",
+            "provider": "openai",
+            "ecommerce_credentials": {
+                "platform": "woocommerce",
+                "base_url": "https://example.com/wp-json/wc/v3",
+                "api_key": "ck_xxxxx",
+                "api_secret": "cs_xxxxx"
+            }
+        }
     """
     # Start timing
     start_time = time.time()
@@ -132,12 +160,70 @@ async def chat(request: ChatRequest):
         # Get collections list (supports both old and new format)
         collections = request.get_collections()
         
+        # Initialize ecommerce client and create tools if credentials are provided
+        ecommerce_client = None
+        ecommerce_tools = []
+        if request.ecommerce_credentials:
+            try:
+                ecommerce_client = EcommerceClient(
+                    platform=request.ecommerce_credentials.platform,
+                    base_url=request.ecommerce_credentials.base_url,
+                    api_key=request.ecommerce_credentials.api_key,
+                    api_secret=request.ecommerce_credentials.api_secret,
+                    access_token=request.ecommerce_credentials.access_token
+                )
+                
+                # Create tools using @tool decorator for proper LLM binding
+                # Use ThreadPoolExecutor to run async code from sync context
+                import concurrent.futures
+                
+                @tool
+                def get_products(limit: int = 5) -> str:
+                    """Fetch products from the connected ecommerce store. Use this tool when the user asks about products, items, catalog, what's available, stock, pricing, costs, or product listings. Returns a formatted list of products with names, prices, and availability."""
+                    import asyncio
+                    
+                    def run_async():
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        try:
+                            return loop.run_until_complete(ecommerce_client.get_products(min(limit, 20)))
+                        finally:
+                            loop.close()
+                    
+                    with concurrent.futures.ThreadPoolExecutor() as executor:
+                        future = executor.submit(run_async)
+                        return future.result()
+                
+                @tool
+                def get_orders(limit: int = 5) -> str:
+                    """Fetch recent orders from the connected ecommerce store. Use this tool when the user asks about orders, purchases, transactions, sales, order history, or order status. Returns a formatted list of orders with order IDs, status, and totals."""
+                    import asyncio
+                    
+                    def run_async():
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        try:
+                            return loop.run_until_complete(ecommerce_client.get_orders(min(limit, 20)))
+                        finally:
+                            loop.close()
+                    
+                    with concurrent.futures.ThreadPoolExecutor() as executor:
+                        future = executor.submit(run_async)
+                        return future.result()
+                
+                ecommerce_tools = [get_products, get_orders]
+                log_info(f"✓ Ecommerce tools created with @tool decorator: {request.ecommerce_credentials.platform}")
+                log_info(f"  - get_products: {get_products.name}")
+                log_info(f"  - get_orders: {get_orders.name}")
+            except Exception as e:
+                log_error(f"Failed to initialize ecommerce client: {e}")
+        
         # If no collections specified, search ALL documents (set to None for all-search)
         if not collections:
             collections = None
-            log_info(f"Chat request - Query: '{request.query}', Collections: ALL (no filter), Thread: '{request.thread_id}'")
+            log_info(f"Chat request - Query: '{request.query}', Collections: ALL (no filter), Thread: '{request.thread_id}', Ecommerce: {bool(ecommerce_client)}")
         else:
-            log_info(f"Chat request - Query: '{request.query}', Collections: {collections}, Thread: '{request.thread_id}'")
+            log_info(f"Chat request - Query: '{request.query}', Collections: {collections}, Thread: '{request.thread_id}', Ecommerce: {bool(ecommerce_client)}")
         
         # Use thread_id as instance_id (or generate a default one)
         instance_id = request.thread_id if request.thread_id else "default"
@@ -163,7 +249,8 @@ async def chat(request: ChatRequest):
             system_prompt=enhanced_system_prompt,
             provider=request.provider,
             api_key=request.api_key,
-            skip_history=request.skip_history  # Skip history for faster responses
+            skip_history=request.skip_history,  # Skip history for faster responses
+            ecommerce_tools=ecommerce_tools if ecommerce_tools else None  # Pass ecommerce tools if available
         )
         
         collection_count = len(collections) if collections else "all"

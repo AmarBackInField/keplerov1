@@ -19,6 +19,15 @@ class StatusResponse(BaseModel):
     transcript: Optional[dict] = None  # Added for call transcripts
 
 
+class EcommerceCredentials(BaseModel):
+    """Credentials for connecting to ecommerce platforms (WooCommerce, Shopify, etc.)."""
+    platform: str  # "woocommerce", "shopify", etc.
+    base_url: str  # Base URL of the store (e.g., "https://www.aistein.it/wp-json/wc/v3")
+    api_key: str  # API key / Consumer key
+    api_secret: Optional[str] = None  # API secret / Consumer secret (for WooCommerce)
+    access_token: Optional[str] = None  # Access token (for platforms like Shopify)
+
+
 # ============================================================================
 # RAG MODELS
 # ============================================================================
@@ -35,6 +44,7 @@ class ChatRequest(BaseModel):
     api_key: Optional[str] = None  # Custom API key for the provider
     elaborate: Optional[bool] = False  # Request detailed/elaborate responses (increases latency)
     skip_history: Optional[bool] = False  # Skip conversation history for faster responses
+    ecommerce_credentials: Optional[EcommerceCredentials] = None  # Ecommerce platform credentials for product/order tools
     
     def get_collections(self) -> list[str]:
         """Get list of collections, supporting both single and multiple collection names."""
@@ -94,6 +104,7 @@ class OutboundCallRequest(BaseModel):
     organisation_id: Optional[str] = None  # Organisation ID for multi-tenant tracking
     contact_number: Optional[str] = None  # Contact number for the caller (used for MongoDB record)
     greeting_message: Optional[str] = None  # Custom greeting message for the call
+    ecommerce_credentials: Optional[EcommerceCredentials] = None  # Ecommerce platform credentials for product/order tools
 
 
 # ============================================================================

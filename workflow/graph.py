@@ -8,7 +8,7 @@ from langgraph.checkpoint.mongodb import MongoDBSaver
 from pymongo import MongoClient
 from langchain_openai import ChatOpenAI
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, ToolMessage
 from config.prompt import SYSTEM_PROMPT, RAG_PROMPT_TEMPLATE
 from utils.logger import log_info, log_error, log_debug, log_warning
 
@@ -70,6 +70,9 @@ class RAGWorkflow:
         
         # OPTIMIZATION: Cache LLM instances to avoid re-initialization overhead
         self.llm_cache = {}  # key: (provider, api_key_hash) -> value: LLM instance
+        
+        # Store ecommerce tools at class level (not in state to avoid serialization issues)
+        self._ecommerce_tools = None
         
         # Initialize MongoDB checkpointer if memory is enabled
         self.memory = None
@@ -239,7 +242,8 @@ class RAGWorkflow:
     
     def generate_node(self, state: GraphState) -> GraphState:
         """
-        Generate answer based on retrieved context and conversation history
+        Generate answer based on retrieved context and conversation history.
+        Supports tool calling for ecommerce integration.
         
         Args:
             state: Current graph state
@@ -256,6 +260,7 @@ class RAGWorkflow:
             # OPTIMIZATION: Use cached LLM instance to avoid re-initialization overhead
             provider = state.get("provider", "openai").lower()
             api_key = state.get("api_key")
+            ecommerce_tools = self._ecommerce_tools or []
             
             try:
                 llm = self._get_cached_llm(provider, api_key)
@@ -264,6 +269,15 @@ class RAGWorkflow:
                 log_error(f"Error getting LLM: {str(e)}")
                 state["answer"] = f"Error: {str(e)}"
                 return state
+            
+            # Bind ecommerce tools to LLM if available
+            # Tools are already created with @tool decorator, so they can be bound directly
+            if ecommerce_tools:
+                for t in ecommerce_tools:
+                    log_info(f"  - Tool: {t.name} - {t.description[:50]}...")
+                
+                llm = llm.bind_tools(ecommerce_tools)
+                log_info(f"✓ Bound {len(ecommerce_tools)} ecommerce tools to LLM ({provider})")
             
             # Build conversation history context (OPTIMIZED: minimal format)
             history_context = ""
@@ -286,6 +300,19 @@ class RAGWorkflow:
             # Build the prompt based on available information
             # Use custom system prompt if provided, otherwise use default
             system_prompt_content = state.get("system_prompt") or SYSTEM_PROMPT
+            if ecommerce_tools:
+                system_prompt_content += """
+
+IMPORTANT: You have access to ecommerce tools that connect to a real store. You MUST use these tools when users ask about:
+- Products, items, catalog, inventory, stock, or what's available
+- Orders, purchases, sales, or transactions
+- Pricing, costs, or product information
+
+When a user asks about products or orders, ALWAYS call the appropriate tool first before responding. The tools will give you real, up-to-date information from the store.
+
+Available tools:
+- get_products: Use this to fetch current products from the store
+- get_orders: Use this to fetch recent orders from the store"""
             messages = [SystemMessage(content=system_prompt_content)]
             
             if has_retrieval_context:
@@ -303,18 +330,105 @@ class RAGWorkflow:
                     prompt = history_context + "\n\n" + prompt
                 messages.append(HumanMessage(content=prompt))
             else:
-                # No retrieval context, but we might have conversation history
-                if history_context:
-                    prompt = f"{history_context}\n\nCurrent question: {state['query']}\n\nPlease answer based on our conversation history."
+                # No retrieval context, but we might have conversation history or ecommerce tools
+                if history_context or ecommerce_tools:
+                    prompt = f"{history_context}\n\nCurrent question: {state['query']}\n\nPlease answer the question."
                     messages.append(HumanMessage(content=prompt))
                 else:
                     state["answer"] = "I don't have enough information in the knowledge base to answer your question. Please try rephrasing or ask about a different topic."
                     return state
             
-            # Generate answer using LLM (dynamic based on provider)
+            # Generate answer using LLM (with tool calling support)
             llm_start = perf_time.time()
             response = llm.invoke(messages)
-            state["answer"] = response.content
+            
+            # Check if LLM wants to call tools
+            log_info(f"LLM response has tool_calls attribute: {hasattr(response, 'tool_calls')}")
+            if hasattr(response, 'tool_calls'):
+                log_info(f"Tool calls: {response.tool_calls}")
+            
+            if hasattr(response, 'tool_calls') and response.tool_calls:
+                log_info(f"✓ LLM requested {len(response.tool_calls)} tool calls")
+                
+                # Execute tool calls - tools are synchronous (use asyncio.run internally)
+                tool_results = []
+                for tool_call in response.tool_calls:
+                    tool_name = tool_call["name"]
+                    tool_args = tool_call.get("args", {})
+                    
+                    log_info(f"  Executing tool: {tool_name} with args: {tool_args}")
+                    
+                    # Find and execute the tool
+                    for t in ecommerce_tools:
+                        if t.name == tool_name:
+                            try:
+                                result = t.invoke(tool_args)
+                                tool_results.append({
+                                    "tool_call_id": tool_call["id"],
+                                    "content": result
+                                })
+                                log_info(f"  ✓ Tool {tool_name} executed successfully")
+                            except Exception as e:
+                                log_error(f"  ✗ Error executing tool {tool_name}: {e}")
+                                tool_results.append({
+                                    "tool_call_id": tool_call["id"],
+                                    "content": f"Error: {str(e)}"
+                                })
+                            break
+                
+                # Add tool results to messages and get final answer
+                messages.append(AIMessage(content=response.content or "", tool_calls=response.tool_calls))
+                for tool_result in tool_results:
+                    messages.append(ToolMessage(
+                        content=tool_result["content"],
+                        tool_call_id=tool_result["tool_call_id"]
+                    ))
+                
+                # Get final answer with tool results
+                log_info(f"  Getting final answer with tool results...")
+                final_response = llm.invoke(messages)
+                state["answer"] = final_response.content
+                log_info(f"✓ Generated answer using tool results")
+            else:
+                log_info(f"✗ LLM did not request any tool calls (ecommerce_tools available: {bool(ecommerce_tools)})")
+                
+                # FALLBACK: If ecommerce query detected but LLM didn't call tools, force execution
+                if ecommerce_tools:
+                    query_lower = state["query"].lower()
+                    is_product_query = any(keyword in query_lower for keyword in 
+                        ['product', 'item', 'stock', 'available', 'price', 'cost', 'catalog', 'inventory', 'list', 'sell', 'buy'])
+                    is_order_query = any(keyword in query_lower for keyword in 
+                        ['order', 'purchase', 'bought', 'transaction', 'sale'])
+                    
+                    if is_product_query or is_order_query:
+                        log_warning(f"✓ FALLBACK: Forcing tool execution for ecommerce query")
+                        
+                        # Execute appropriate tool
+                        tool_result = None
+                        for t in ecommerce_tools:
+                            if is_product_query and t.name == "get_products":
+                                tool_result = t.invoke({"limit": 10})
+                                log_info(f"  ✓ Forced get_products execution")
+                                break
+                            elif is_order_query and t.name == "get_orders":
+                                tool_result = t.invoke({"limit": 10})
+                                log_info(f"  ✓ Forced get_orders execution")
+                                break
+                        
+                        if tool_result:
+                            # Re-prompt LLM with tool results
+                            enhanced_prompt = f"Here is the store data:\n\n{tool_result}\n\nUser question: {state['query']}\n\nPlease provide a helpful answer based on this data."
+                            messages.append(HumanMessage(content=enhanced_prompt))
+                            final_response = llm.invoke(messages)
+                            state["answer"] = final_response.content
+                            log_info(f"✓ Generated answer using forced tool data")
+                        else:
+                            state["answer"] = response.content
+                    else:
+                        state["answer"] = response.content
+                else:
+                    state["answer"] = response.content
+            
             log_info(f"⏱️ LLM CALL: Completed in {(perf_time.time() - llm_start)*1000:.0f}ms (provider: {provider})")
             
             # Update conversation history
@@ -332,7 +446,9 @@ class RAGWorkflow:
             return state
         
         except Exception as e:
+            import traceback
             log_error(f"Error in generate node: {str(e)}")
+            log_error(f"Traceback: {traceback.format_exc()}")
             state["answer"] = "I encountered an error while generating the answer. Please try again."
             return state
     
@@ -346,11 +462,13 @@ class RAGWorkflow:
         system_prompt: Optional[str] = None,
         provider: Optional[str] = "openai",
         api_key: Optional[str] = None,
-        skip_history: bool = False
+        skip_history: bool = False,
+        ecommerce_tools: Optional[List] = None
     ) -> dict:
         """
         Run the RAG workflow with conversation memory.
         Supports querying multiple logical collections stored in a single Qdrant collection.
+        Supports tool calling for ecommerce integration.
         
         Args:
             query: User's question
@@ -362,6 +480,7 @@ class RAGWorkflow:
             provider: LLM provider to use ("openai" or "gemini", default: "openai")
             api_key: Optional API key for the provider
             skip_history: Skip conversation history lookup for faster responses (default: False)
+            ecommerce_tools: Optional list of ecommerce tool functions to bind to LLM
             
         Returns:
             Dictionary with answer and retrieved documents
@@ -379,6 +498,9 @@ class RAGWorkflow:
                 collections = [collection_name]
             
             log_info(f"Running RAG workflow for query: '{query}' (collections: {collections}, thread: {thread_id or 'default'})")
+            
+            # Set ecommerce tools at class level (not in state to avoid serialization issues)
+            self._ecommerce_tools = ecommerce_tools
             
             # Configuration for thread
             config = {
@@ -437,6 +559,9 @@ class RAGWorkflow:
             total_time = (perf_time.time() - run_start) * 1000
             log_info(f"⏱️ WORKFLOW TOTAL: Completed in {total_time:.0f}ms")
             
+            # Clean up ecommerce tools after workflow completes
+            self._ecommerce_tools = None
+            
             return {
                 "answer": result["answer"],
                 "retrieved_docs": result["retrieved_docs"],
@@ -449,6 +574,10 @@ class RAGWorkflow:
             import traceback
             log_error(f"Error running RAG workflow: {str(e)}")
             log_error(f"Full traceback:\n{traceback.format_exc()}")
+            
+            # Clean up ecommerce tools even on error
+            self._ecommerce_tools = None
+            
             return {
                 "answer": "An error occurred while processing your request.",
                 "retrieved_docs": [],

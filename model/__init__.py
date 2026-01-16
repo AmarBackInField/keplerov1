@@ -14,6 +14,7 @@ from .model import (
     DeleteCollectionRequest,
     
     # Calls models
+    EcommerceCredentials,
     OutboundCallRequest,
     
     # LLM models
@@ -72,6 +73,7 @@ __all__ = [
     "DeleteCollectionRequest",
     
     # Calls
+    "EcommerceCredentials",
     "OutboundCallRequest",
     
     # LLM

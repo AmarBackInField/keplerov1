@@ -16,7 +16,8 @@ from utils.logger import log_info, log_error, log_warning, log_exception
 from voice_backend.outboundService.services.call_service import make_outbound_call
 from voice_backend.outboundService.common.utils import validate_phone_number, format_phone_number
 from model import (
-    OutboundCallRequest, 
+    OutboundCallRequest,
+    EcommerceCredentials,
     StatusResponse, 
     CreateSIPTrunkRequest, 
     CreateSIPTrunkResponse, 
@@ -69,6 +70,12 @@ async def outbound_call(request: OutboundCallRequest):
             - api_key: Custom API key for the provider (optional)
             - collection_names: List of RAG collections to search (optional)
             - greeting_message: Custom greeting message for the call (optional)
+            - ecommerce_credentials: Credentials for ecommerce platform integration (optional)
+                - platform: "woocommerce", "shopify", etc.
+                - base_url: Store API base URL
+                - api_key: API key / Consumer key
+                - api_secret: API secret (for WooCommerce)
+                - access_token: Access token (for Shopify)
         
     Returns:
         StatusResponse with call status and caller_id (room name)
@@ -96,6 +103,32 @@ async def outbound_call(request: OutboundCallRequest):
             "dynamic_instruction": "Answer questions about our products",
             "collection_names": ["product_docs", "pricing_info"],
             "provider": "openai"
+        }
+        
+        With ecommerce integration (WooCommerce):
+        {
+            "phone_number": "+1234567890",
+            "name": "John Doe",
+            "dynamic_instruction": "Help customer with their order and recommend products",
+            "ecommerce_credentials": {
+                "platform": "woocommerce",
+                "base_url": "https://www.example.com/wp-json/wc/v3",
+                "api_key": "ck_xxxxxxxxxxxxx",
+                "api_secret": "cs_xxxxxxxxxxxxx"
+            }
+        }
+        
+        With ecommerce integration (Shopify):
+        {
+            "phone_number": "+1234567890",
+            "name": "Jane Smith",
+            "dynamic_instruction": "Assist with order tracking and product inquiries",
+            "ecommerce_credentials": {
+                "platform": "shopify",
+                "base_url": "https://mystore.myshopify.com",
+                "api_key": "shpat_xxxxxxxxxxxxx",
+                "access_token": "shpat_xxxxxxxxxxxxx"
+            }
         }
     """
     try:
@@ -167,6 +200,15 @@ async def outbound_call(request: OutboundCallRequest):
                 update_doc["organisation_id"] = request.organisation_id
             if request.greeting_message:
                 update_doc["greeting_message"] = request.greeting_message
+            if request.ecommerce_credentials:
+                # Save ecommerce credentials for agent to use
+                update_doc["ecommerce_credentials"] = {
+                    "platform": request.ecommerce_credentials.platform,
+                    "base_url": request.ecommerce_credentials.base_url,
+                    "api_key": request.ecommerce_credentials.api_key,
+                    "api_secret": request.ecommerce_credentials.api_secret,
+                    "access_token": request.ecommerce_credentials.access_token
+                }
             
             # Update the single document (upsert if it doesn't exist)
             result = collection.update_one(
@@ -199,6 +241,9 @@ async def outbound_call(request: OutboundCallRequest):
                 log_info(f"  - Contact Number: {request.contact_number}")
             if request.greeting_message:
                 log_info(f"  - Greeting Message: {request.greeting_message}")
+            if request.ecommerce_credentials:
+                log_info(f"  - Ecommerce Platform: {request.ecommerce_credentials.platform}")
+                log_info(f"  - Ecommerce URL: {request.ecommerce_credentials.base_url}")
                 
         except Exception as e:
             log_error(f"Failed to update MongoDB configuration: {str(e)}")
