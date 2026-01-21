@@ -578,6 +578,34 @@ async def entrypoint(ctx: agents.JobContext):
     if escalation_condition:
         full_instructions += f"\n\nEscalation Condition: {escalation_condition}. When this condition is met, use the transfer_to_human tool to transfer the call."
     
+    # Load registered tools and add their descriptions to instructions
+    registered_tools = await load_registered_tools_async()
+    if registered_tools:
+        tool_descriptions = []
+        for tool_id, tool_config in registered_tools.items():
+            tool_name = tool_config.get("tool_name", "unknown")
+            tool_type = tool_config.get("tool_type", "unknown")
+            tool_desc = tool_config.get("description", "No description")
+            props = tool_config.get("schema", {}).get("properties", {})
+            
+            # Build parameter info
+            param_info = []
+            for prop_name, prop_config in props.items():
+                default_val = prop_config.get("value", "")
+                if default_val:
+                    param_info.append(f"{prop_name}='{default_val[:30]}...' (default)" if len(str(default_val)) > 30 else f"{prop_name}='{default_val}' (default)")
+                else:
+                    param_info.append(f"{prop_name} (required)")
+            
+            tool_descriptions.append(f"- {tool_name} ({tool_type}): {tool_desc}")
+            if param_info:
+                tool_descriptions.append(f"  Parameters: {', '.join(param_info)}")
+        
+        if tool_descriptions:
+            full_instructions += "\n\n## Available Tools:\n" + "\n".join(tool_descriptions)
+            full_instructions += "\n\nWhen you need to use a tool, call send_email_tool with the tool_name parameter matching the tool you want to use."
+            logger.info(f"Added {len(registered_tools)} tool descriptions to instructions")
+    
     logger.info(f"Agent Instructions: {full_instructions[:200]}...")
     
     assistant = Assistant(
