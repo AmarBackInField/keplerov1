@@ -7,11 +7,8 @@ import time
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 from datetime import datetime
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 
 import aiohttp
-import aiosmtplib
 from motor.motor_asyncio import AsyncIOMotorClient
 from dotenv import load_dotenv
 
@@ -74,12 +71,9 @@ MONGODB_URI = os.getenv("MONGODB_URI")
 MONGODB_DATABASE = "IslandAI"
 INBOUND_CONFIG_COLLECTION = "inbound-agent-config"
 
-# SMTP Configuration
-SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.gmail.com")
-SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
-SMTP_USERNAME = os.getenv("EMAIL_ADDRESS", "")
-SMTP_PASSWORD = os.getenv("EMAIL_PASSWORD", "")
-SMTP_FROM_EMAIL = os.getenv("EMAIL_ADDRESS", SMTP_USERNAME)
+# Gmail API Configuration
+API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
+GMAIL_USER_EMAIL = os.getenv("GMAIL_USER_EMAIL", "")  # Authorized Gmail address
 
 # Global Caches
 _TOOLS_CACHE = None
@@ -119,26 +113,49 @@ async def load_registered_tools_async() -> Dict[str, Any]:
         logger.error(f"Error loading tools: {e}")
     return {}
 
-async def send_smtp_email_async(to: str, subject: str, body: str, cc: Optional[str] = None):
-    """Fully async SMTP sending."""
+async def send_gmail_email_async(
+    to: str, 
+    subject: str, 
+    body: str, 
+    cc: Optional[str] = None,
+    user_email: Optional[str] = None
+) -> bool:
+    """Send email via Gmail API endpoint."""
+    sender_email = user_email or GMAIL_USER_EMAIL
+    
+    if not sender_email:
+        logger.error("Gmail user email not configured. Set GMAIL_USER_EMAIL env var or authorize at /email/authorize")
+        return False
+    
     try:
-        msg = MIMEMultipart()
-        msg['From'] = SMTP_FROM_EMAIL
-        msg['To'] = to
-        msg['Subject'] = subject
-        if cc: msg['Cc'] = cc
-        msg.attach(MIMEText(body, 'plain'))
-        
-        recipients = [to]
-        if cc: recipients.append(cc)
-        
-        smtp = aiosmtplib.SMTP(hostname=SMTP_SERVER, port=SMTP_PORT)
-        await smtp.connect()
-        await smtp.starttls()
-        await smtp.login(SMTP_USERNAME, SMTP_PASSWORD)
-        await smtp.sendmail(SMTP_FROM_EMAIL, recipients, msg.as_string())
-        await smtp.quit()
-        return True
+        async with aiohttp.ClientSession() as session:
+            payload = {
+                "to": to,
+                "subject": subject,
+                "body": body
+            }
+            if cc:
+                payload["cc"] = [cc] if isinstance(cc, str) else cc
+            
+            headers = {
+                "Content-Type": "application/json",
+                "X-User-Email": sender_email
+            }
+            
+            async with session.post(
+                f"{API_BASE_URL}/email/send",
+                json=payload,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=30)
+            ) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    logger.info(f"Email sent successfully via Gmail API: {result.get('message_id')}")
+                    return True
+                else:
+                    error_text = await response.text()
+                    logger.error(f"Gmail API error ({response.status}): {error_text}")
+                    return False
     except Exception as e:
         logger.error(f"Email failed: {e}")
         return False
@@ -223,17 +240,24 @@ class Assistant(Agent):
 
     @function_tool
     async def send_email_tool(self, ctx: RunContext, tool_name: str, to: str, subject: Optional[str] = None, body: Optional[str] = None, cc: Optional[str] = None) -> str:
-        """Send email in background."""
+        """Send email via Gmail API in background."""
         tools = await load_registered_tools_async()
         tool = next((t for tid, t in tools.items() if t.get("tool_name") == tool_name), None)
-        if not tool or tool.get("tool_type") != "email": return "error"
+        if not tool or tool.get("tool_type") != "email": 
+            return "error: tool not found or not an email tool"
         
         props = tool.get("schema", {}).get("properties", {})
         final_subject = subject or props.get("subject", {}).get("value", "")
         final_body = body or props.get("body", {}).get("value", "")
         final_cc = cc or props.get("cc", {}).get("value", "")
         
-        asyncio.create_task(send_smtp_email_async(to, final_subject, final_body, final_cc))
+        # Get gmail_user_email from agent config
+        gmail_user = self.agent_config.get("gmail_user_email", GMAIL_USER_EMAIL)
+        
+        if not gmail_user:
+            return "error: Gmail not configured. Set gmail_user_email in config or authorize at /email/authorize"
+        
+        asyncio.create_task(send_gmail_email_async(to, final_subject, final_body, final_cc, gmail_user))
         return "success: email queued"
 
     @function_tool

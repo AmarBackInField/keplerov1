@@ -143,7 +143,11 @@ async def root():
             "Email": {
                 "prefix": "/email",
                 "endpoints": [
-                    "POST /email/send - Send email via SMTP"
+                    "GET /email/authorize - Start Gmail OAuth authorization",
+                    "GET /email/oauth2callback - OAuth callback (automatic)",
+                    "POST /email/send - Send email via Gmail API (requires X-User-Email header)",
+                    "DELETE /email/logout - Remove stored Gmail credentials",
+                    "GET /email/connected-users - List connected Gmail accounts"
                 ]
             },
             "Bulk Communication": {

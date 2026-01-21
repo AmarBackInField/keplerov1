@@ -1,7 +1,7 @@
 import os
 import base64
 from email.message import EmailMessage
-from flask import Flask, request, redirect, session, jsonify
+from flask import Flask, request, redirect, session, jsonify, render_template_string
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 from google.auth.transport.requests import Request
@@ -114,6 +114,21 @@ def get_user_email_from_google(credentials):
     return profile['emailAddress']
 
 
+def get_email_body(message):
+    """Extract email body from message payload"""
+    if 'parts' in message['payload']:
+        for part in message['payload']['parts']:
+            if part['mimeType'] == 'text/plain':
+                if 'data' in part['body']:
+                    return base64.urlsafe_b64decode(part['body']['data']).decode()
+            elif part['mimeType'] == 'text/html':
+                if 'data' in part['body']:
+                    return base64.urlsafe_b64decode(part['body']['data']).decode()
+    elif 'body' in message['payload'] and 'data' in message['payload']['body']:
+        return base64.urlsafe_b64decode(message['payload']['body']['data']).decode()
+    return "No body content"
+
+
 @app.route('/')
 def index():
     user_email = session.get('user_email')
@@ -122,7 +137,7 @@ def index():
         return f'''
             <h1>Gmail OAuth Platform</h1>
             <p>✅ Connected as: <strong>{user_email}</strong></p>
-            <a href="/send-test-email"><button>Send Test Email</button></a>
+            <a href="/compose-email"><button>Compose New Email</button></a>
             <br><br>
             <a href="/read-emails"><button>Read Latest Emails</button></a>
             <br><br>
@@ -158,31 +173,16 @@ def authorize():
 @app.route('/oauth2callback')
 def oauth2callback():
     """Step 2: Handle the callback from Google"""
-    # Get state and code from URL parameters
-    state_from_url = request.args.get('state')
-    code = request.args.get('code')
+    state = session['state']
     
-    # Try to get state from session, but don't fail if missing
-    session_state = session.get('state')
+    flow = Flow.from_client_secrets_file(
+        CLIENT_SECRETS_FILE,
+        scopes=SCOPES,
+        state=state,
+        redirect_uri=REDIRECT_URI
+    )
     
-    # Create flow - use state only if it matches
-    if session_state and session_state == state_from_url:
-        flow = Flow.from_client_secrets_file(
-            CLIENT_SECRETS_FILE,
-            scopes=SCOPES,
-            state=state_from_url,
-            redirect_uri=REDIRECT_URI
-        )
-        flow.fetch_token(authorization_response=request.url)
-    else:
-        # Bypass state verification - use code directly
-        flow = Flow.from_client_secrets_file(
-            CLIENT_SECRETS_FILE,
-            scopes=SCOPES,
-            redirect_uri=REDIRECT_URI
-        )
-        flow.fetch_token(code=code)
-    
+    flow.fetch_token(authorization_response=request.url)
     credentials = flow.credentials
     
     # Get user's email address
@@ -201,9 +201,35 @@ def oauth2callback():
     '''
 
 
-@app.route('/send-test-email')
-def send_test_email():
-    """Send a test email"""
+@app.route('/compose-email')
+def compose_email():
+    """Show email composition form"""
+    user_email = session.get('user_email')
+    
+    if not user_email:
+        return redirect('/authorize')
+    
+    return '''
+        <h1>✉️ Compose New Email</h1>
+        <form action="/send-email" method="POST">
+            <label for="to">To:</label><br>
+            <input type="email" id="to" name="to" required style="width: 400px; padding: 5px;"><br><br>
+            
+            <label for="subject">Subject:</label><br>
+            <input type="text" id="subject" name="subject" required style="width: 400px; padding: 5px;"><br><br>
+            
+            <label for="body">Body:</label><br>
+            <textarea id="body" name="body" required rows="10" style="width: 400px; padding: 5px;"></textarea><br><br>
+            
+            <button type="submit">Send Email</button>
+            <a href="/"><button type="button">Cancel</button></a>
+        </form>
+    '''
+
+
+@app.route('/send-email', methods=['POST'])
+def send_email():
+    """Send custom email"""
     user_email = session.get('user_email')
     
     if not user_email:
@@ -215,10 +241,14 @@ def send_test_email():
         return redirect('/authorize')
     
     try:
+        to = request.form.get('to')
+        subject = request.form.get('subject')
+        body = request.form.get('body')
+        
         message = EmailMessage()
-        message.set_content('This is a test email sent from your Gmail via our platform!')
-        message['To'] = user_email  # Sending to self for testing
-        message['Subject'] = 'Test Email from Gmail OAuth Platform'
+        message.set_content(body)
+        message['To'] = to
+        message['Subject'] = subject
         
         encoded_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
         
@@ -231,11 +261,12 @@ def send_test_email():
         
         return f'''
             <h1>✅ Email Sent Successfully!</h1>
-            <p>Sent to: {user_email}</p>
-            <p>Thread ID: {result['threadId']}</p>
-            <p>Message ID: {result['id']}</p>
-            <a href="/read-thread/{result['threadId']}"><button>View Thread</button></a>
-            <br><br>
+            <p><b>To:</b> {to}</p>
+            <p><b>Subject:</b> {subject}</p>
+            <p><b>Thread ID:</b> {result['threadId']}</p>
+            <p><b>Message ID:</b> {result['id']}</p>
+            <br>
+            <a href="/compose-email"><button>Send Another Email</button></a>
             <a href="/"><button>Back to Dashboard</button></a>
         '''
     
@@ -243,13 +274,14 @@ def send_test_email():
         return f'''
             <h1>❌ Error Sending Email</h1>
             <p>{str(e)}</p>
+            <a href="/compose-email"><button>Try Again</button></a>
             <a href="/"><button>Back to Dashboard</button></a>
         '''
 
 
 @app.route('/read-emails')
 def read_emails():
-    """Read latest 5 emails"""
+    """Read latest 10 full emails"""
     user_email = session.get('user_email')
     
     if not user_email:
@@ -263,7 +295,7 @@ def read_emails():
     try:
         results = service.users().messages().list(
             userId='me',
-            maxResults=5
+            maxResults=10
         ).execute()
         
         messages = results.get('messages', [])
@@ -271,14 +303,34 @@ def read_emails():
         if not messages:
             return '<h1>No emails found</h1><a href="/"><button>Back</button></a>'
         
-        emails_html = f'<h1>📬 Latest Emails for {user_email}</h1><ul>'
+        emails_html = f'''
+            <h1>📬 Latest 10 Emails for {user_email}</h1>
+            <style>
+                .email-card {{
+                    border: 1px solid #ddd;
+                    padding: 15px;
+                    margin: 10px 0;
+                    border-radius: 5px;
+                    background-color: #f9f9f9;
+                }}
+                .email-header {{ font-weight: bold; color: #333; }}
+                .email-body {{
+                    margin-top: 10px;
+                    padding: 10px;
+                    background-color: white;
+                    border-left: 3px solid #4CAF50;
+                    white-space: pre-wrap;
+                    max-height: 300px;
+                    overflow-y: auto;
+                }}
+            </style>
+        '''
         
-        for msg in messages:
+        for idx, msg in enumerate(messages, 1):
             message = service.users().messages().get(
                 userId='me',
                 id=msg['id'],
-                format='metadata',
-                metadataHeaders=['From', 'Subject', 'Date']
+                format='full'
             ).execute()
             
             headers = message['payload']['headers']
@@ -292,16 +344,25 @@ def read_emails():
                 if h['name'] == 'Date':
                     date = h['value']
             
+            # Get email body
+            body = get_email_body(message)
+            
             emails_html += f'''
-                <li>
-                    <b>From:</b> {sender}<br>
-                    <b>Subject:</b> {subject}<br>
-                    <b>Date:</b> {date}<br>
-                    <a href="/read-thread/{message['threadId']}">View Thread</a>
-                </li><br>
+                <div class="email-card">
+                    <div class="email-header">Email #{idx}</div>
+                    <p><b>From:</b> {sender}</p>
+                    <p><b>Subject:</b> {subject}</p>
+                    <p><b>Date:</b> {date}</p>
+                    <div class="email-body">
+                        <b>Body:</b><br>
+                        {body[:1000]}{"..." if len(body) > 1000 else ""}
+                    </div>
+                    <br>
+                    <a href="/read-thread/{message['threadId']}"><button>View Full Thread</button></a>
+                </div>
             '''
         
-        emails_html += '</ul><a href="/"><button>Back to Dashboard</button></a>'
+        emails_html += '<br><a href="/"><button>Back to Dashboard</button></a>'
         return emails_html
     
     except Exception as e:
@@ -310,7 +371,7 @@ def read_emails():
 
 @app.route('/read-thread/<thread_id>')
 def read_thread(thread_id):
-    """Read all messages in a thread"""
+    """Read all messages in a thread with full content"""
     user_email = session.get('user_email')
     
     if not user_email:
@@ -324,10 +385,30 @@ def read_thread(thread_id):
     try:
         thread = service.users().threads().get(
             userId='me',
-            id=thread_id
+            id=thread_id,
+            format='full'
         ).execute()
         
-        thread_html = f'<h1>🔁 Email Thread ({len(thread["messages"])} messages)</h1><ul>'
+        thread_html = f'''
+            <h1>🔁 Email Thread ({len(thread["messages"])} messages)</h1>
+            <style>
+                .thread-message {{
+                    border: 1px solid #ddd;
+                    padding: 15px;
+                    margin: 15px 0;
+                    border-radius: 5px;
+                    background-color: #f9f9f9;
+                }}
+                .message-header {{ font-weight: bold; color: #333; }}
+                .message-body {{
+                    margin-top: 10px;
+                    padding: 10px;
+                    background-color: white;
+                    border-left: 3px solid #2196F3;
+                    white-space: pre-wrap;
+                }}
+            </style>
+        '''
         
         for idx, message in enumerate(thread['messages'], 1):
             headers = message['payload']['headers']
@@ -341,16 +422,24 @@ def read_thread(thread_id):
                 if h['name'] == 'Date':
                     date = h['value']
             
+            # Get email body
+            body = get_email_body(message)
+            
             thread_html += f'''
-                <li>
-                    <b>Message {idx}</b><br>
-                    <b>From:</b> {sender}<br>
-                    <b>Subject:</b> {subject}<br>
-                    <b>Date:</b> {date}
-                </li><br>
+                <div class="thread-message">
+                    <div class="message-header">Message {idx}</div>
+                    <p><b>From:</b> {sender}</p>
+                    <p><b>Subject:</b> {subject}</p>
+                    <p><b>Date:</b> {date}</p>
+                    <div class="message-body">
+                        <b>Content:</b><br>
+                        {body}
+                    </div>
+                </div>
             '''
         
-        thread_html += '</ul><a href="/"><button>Back to Dashboard</button></a>'
+        thread_html += '<br><a href="/read-emails"><button>Back to Emails</button></a> '
+        thread_html += '<a href="/"><button>Back to Dashboard</button></a>'
         return thread_html
     
     except Exception as e:

@@ -105,6 +105,8 @@ class OutboundCallRequest(BaseModel):
     contact_number: Optional[str] = None  # Contact number for the caller (used for MongoDB record)
     greeting_message: Optional[str] = None  # Custom greeting message for the call
     ecommerce_credentials: Optional[EcommerceCredentials] = None  # Ecommerce platform credentials for product/order tools
+    owner_email: Optional[str] = None  # Authorized Gmail address for sending emails (from /email/authorize)
+    email: Optional[str] = None  # Recipient email address for email tools
 
 
 # ============================================================================

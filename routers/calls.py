@@ -209,6 +209,10 @@ async def outbound_call(request: OutboundCallRequest):
                     "api_secret": request.ecommerce_credentials.api_secret,
                     "access_token": request.ecommerce_credentials.access_token
                 }
+            if request.owner_email:
+                update_doc["owner_email"] = request.owner_email
+            if request.email:
+                update_doc["email"] = request.email
             
             # Update the single document (upsert if it doesn't exist)
             result = collection.update_one(
@@ -244,6 +248,10 @@ async def outbound_call(request: OutboundCallRequest):
             if request.ecommerce_credentials:
                 log_info(f"  - Ecommerce Platform: {request.ecommerce_credentials.platform}")
                 log_info(f"  - Ecommerce URL: {request.ecommerce_credentials.base_url}")
+            if request.owner_email:
+                log_info(f"  - Owner Email (Gmail): {request.owner_email}")
+            if request.email:
+                log_info(f"  - Recipient Email: {request.email}")
                 
         except Exception as e:
             log_error(f"Failed to update MongoDB configuration: {str(e)}")

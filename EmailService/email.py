@@ -1,78 +1,267 @@
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
+"""
+Gmail Email Service - Provides Gmail API functionality with OAuth
+"""
+
 import os
-from dotenv import load_dotenv
+import base64
+from email.message import EmailMessage
+from typing import Optional, List
+from datetime import datetime
 
-load_dotenv()
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import Flow
+from google.auth.transport.requests import Request
+from googleapiclient.discovery import build
+from pymongo import MongoClient
+from cryptography.fernet import Fernet
 
 
-class EmailService:
-    """Service class for sending emails via SMTP."""
+class GmailService:
+    """Service class for Gmail operations with OAuth authentication."""
     
-    def __init__(self, sender_email=None, app_password=None, smtp_server="smtp.gmail.com", smtp_port=465):
+    def __init__(
+        self,
+        mongodb_uri: Optional[str] = None,
+        db_name: str = "Findiy_Production_Python",
+        collection_name: str = "gmail_credentials",
+        encryption_key: Optional[str] = None,
+        client_secrets_file: str = "credentials.json",
+        redirect_uri: str = "http://localhost:8000/email/oauth2callback"
+    ):
         """
-        Initialize the Email Service.
+        Initialize the Gmail Service.
         
         Args:
-            sender_email (str): Sender's email address. Defaults to EMAIL_ADDRESS env var.
-            app_password (str): App password for authentication. Defaults to EMAIL_PASSWORD env var.
-            smtp_server (str): SMTP server address. Defaults to Gmail's SMTP server.
-            smtp_port (int): SMTP server port. Defaults to 465 (SSL).
+            mongodb_uri: MongoDB connection URI
+            db_name: Database name for storing credentials
+            collection_name: Collection name for storing credentials
+            encryption_key: Fernet encryption key for token encryption
+            client_secrets_file: Path to Google OAuth credentials.json
+            redirect_uri: OAuth callback URI
         """
-        self.sender_email = sender_email or os.environ.get("EMAIL_ADDRESS")
-        self.app_password = app_password or os.environ.get("EMAIL_PASSWORD")
-        self.smtp_server = smtp_server
-        self.smtp_port = smtp_port
+        # MongoDB Configuration
+        self.mongodb_uri = mongodb_uri or os.getenv(
+            "MONGODB_URI",
+            "mongodb+srv://pythonProd:pythonfindiy25@findiy-main.t5gfeq.mongodb.net/Findiy_Production_Python?retryWrites=true&w=majority&appName=Findiy-main"
+        )
+        self.db_name = db_name
+        self.collection_name = collection_name
         
-        if not self.sender_email or not self.app_password:
-            raise ValueError("Email credentials not provided. Set EMAIL_ADDRESS and EMAIL_PASSWORD environment variables.")
+        # Connect to MongoDB
+        self._client = MongoClient(self.mongodb_uri)
+        self._db = self._client[self.db_name]
+        self._collection = self._db[self.collection_name]
+        
+        # Encryption
+        default_key = "nybmG4fqyl5PZkymPJHsgBCCqxvf1jqwpENm-0-crVo="
+        key = encryption_key or os.getenv('ENCRYPTION_KEY', default_key)
+        self._cipher = Fernet(key.encode() if isinstance(key, str) else key)
+        
+        # OAuth Configuration
+        self.client_secrets_file = client_secrets_file
+        self.scopes = ['https://www.googleapis.com/auth/gmail.send']
+        self.redirect_uri = redirect_uri
     
-    def send_email(self, receiver_email, subject, body, is_html=False):
+    def _encrypt_token(self, token: str) -> str:
+        """Encrypt sensitive token data."""
+        return self._cipher.encrypt(token.encode()).decode()
+    
+    def _decrypt_token(self, encrypted_token: str) -> str:
+        """Decrypt token data."""
+        return self._cipher.decrypt(encrypted_token.encode()).decode()
+    
+    def save_credentials(self, user_email: str, credentials: Credentials):
+        """Save user credentials to MongoDB."""
+        creds_data = {
+            'user_email': user_email,
+            'token': self._encrypt_token(credentials.token),
+            'refresh_token': self._encrypt_token(credentials.refresh_token) if credentials.refresh_token else None,
+            'token_uri': credentials.token_uri,
+            'client_id': credentials.client_id,
+            'client_secret': self._encrypt_token(credentials.client_secret),
+            'scopes': credentials.scopes,
+            'created_at': datetime.utcnow(),
+            'updated_at': datetime.utcnow()
+        }
+        
+        self._collection.update_one(
+            {'user_email': user_email},
+            {'$set': creds_data},
+            upsert=True
+        )
+    
+    def get_credentials(self, user_email: str) -> Optional[Credentials]:
+        """Retrieve user credentials from MongoDB."""
+        doc = self._collection.find_one({'user_email': user_email})
+        
+        if not doc:
+            return None
+        
+        try:
+            token = self._decrypt_token(doc['token'])
+            refresh_token = self._decrypt_token(doc['refresh_token']) if doc.get('refresh_token') else None
+            client_secret = self._decrypt_token(doc['client_secret'])
+            
+            return Credentials(
+                token=token,
+                refresh_token=refresh_token,
+                token_uri=doc['token_uri'],
+                client_id=doc['client_id'],
+                client_secret=client_secret,
+                scopes=doc['scopes']
+            )
+        except Exception:
+            self._collection.delete_one({'user_email': user_email})
+            return None
+    
+    def delete_credentials(self, user_email: str) -> bool:
+        """Delete user credentials from MongoDB."""
+        result = self._collection.delete_one({'user_email': user_email})
+        return result.deleted_count > 0
+    
+    def get_gmail_service(self, user_email: str):
+        """Get Gmail API service with stored credentials."""
+        creds = self.get_credentials(user_email)
+        
+        if not creds:
+            raise ValueError(f"No credentials found for {user_email}")
+        
+        if creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+            self.save_credentials(user_email, creds)
+        
+        return build('gmail', 'v1', credentials=creds)
+    
+    def get_authorization_url(self) -> tuple[str, str]:
         """
-        Send an email to a recipient.
+        Get the Google OAuth authorization URL.
+        
+        Returns:
+            Tuple of (authorization_url, state)
+        """
+        os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
+        os.environ['OAUTHLIB_RELAX_TOKEN_SCOPE'] = '1'
+        
+        flow = Flow.from_client_secrets_file(
+            self.client_secrets_file,
+            scopes=self.scopes,
+            redirect_uri=self.redirect_uri
+        )
+        
+        authorization_url, state = flow.authorization_url(
+            access_type='offline',
+            include_granted_scopes='true',
+            prompt='consent'
+        )
+        
+        # Store state temporarily
+        self._collection.update_one(
+            {'_id': 'oauth_state'},
+            {'$set': {'state': state, 'timestamp': datetime.utcnow()}},
+            upsert=True
+        )
+        
+        return authorization_url, state
+    
+    def handle_oauth_callback(self, code: str, state: Optional[str] = None) -> str:
+        """
+        Handle OAuth callback and store credentials.
         
         Args:
-            receiver_email (str): Recipient's email address.
-            subject (str): Email subject line.
-            body (str): Email body content.
-            is_html (bool): Whether the body is HTML. Defaults to False (plain text).
+            code: Authorization code from Google
+            state: State parameter from callback
             
         Returns:
-            bool: True if email sent successfully, False otherwise.
+            User's email address
         """
-        try:
-            # Create the email message
-            msg = MIMEMultipart()
-            msg["From"] = self.sender_email
-            msg["To"] = receiver_email
-            msg["Subject"] = subject
-            
-            # Attach the body
-            content_type = "html" if is_html else "plain"
-            msg.attach(MIMEText(body, content_type))
-            
-            # Connect and send
-            with smtplib.SMTP_SSL(self.smtp_server, self.smtp_port) as server:
-                server.login(self.sender_email, self.app_password)
-                server.send_message(msg)
-            
-            print(f"✅ Email sent successfully to {receiver_email}!")
-            return True
-            
-        except Exception as e:
-            print(f"❌ Error sending email: {e}")
-            return False
-
-
-# Example usage
-if __name__ == "__main__":
-    # Initialize the email service
-    email_service = EmailService()
+        os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
+        os.environ['OAUTHLIB_RELAX_TOKEN_SCOPE'] = '1'
+        
+        state_doc = self._collection.find_one({'_id': 'oauth_state'})
+        stored_state = state_doc.get('state') if state_doc else None
+        
+        if stored_state and state and stored_state == state:
+            flow = Flow.from_client_secrets_file(
+                self.client_secrets_file,
+                scopes=self.scopes,
+                state=state,
+                redirect_uri=self.redirect_uri
+            )
+        else:
+            flow = Flow.from_client_secrets_file(
+                self.client_secrets_file,
+                scopes=self.scopes,
+                redirect_uri=self.redirect_uri
+            )
+        
+        flow.fetch_token(code=code)
+        credentials = flow.credentials
+        
+        # Get user email from Google
+        service = build('gmail', 'v1', credentials=credentials)
+        profile = service.users().getProfile(userId='me').execute()
+        user_email = profile['emailAddress']
+        
+        self.save_credentials(user_email, credentials)
+        self._collection.delete_one({'_id': 'oauth_state'})
+        
+        return user_email
     
-    # Send a test email
-    email_service.send_email(
-        receiver_email="recipient@example.com",
-        subject="Test Email via SMTP",
-        body="Hello! This is a test email sent via Python SMTP. 🚀"
-    )
+    def send_email(
+        self,
+        user_email: str,
+        to: str,
+        subject: str,
+        body: str,
+        cc: Optional[List[str]] = None,
+        bcc: Optional[List[str]] = None
+    ) -> dict:
+        """
+        Send an email via Gmail API.
+        
+        Args:
+            user_email: The authenticated user's email
+            to: Recipient email address
+            subject: Email subject
+            body: Email body content
+            cc: Optional list of CC recipients
+            bcc: Optional list of BCC recipients
+            
+        Returns:
+            Dict with message_id, thread_id, and success status
+        """
+        service = self.get_gmail_service(user_email)
+        
+        message = EmailMessage()
+        message.set_content(body)
+        message['To'] = to
+        message['Subject'] = subject
+        
+        if cc:
+            message['Cc'] = ', '.join(cc)
+        
+        if bcc:
+            message['Bcc'] = ', '.join(bcc)
+        
+        encoded_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
+        send_message = {'raw': encoded_message}
+        
+        result = service.users().messages().send(
+            userId='me',
+            body=send_message
+        ).execute()
+        
+        return {
+            'success': True,
+            'message_id': result['id'],
+            'thread_id': result['threadId'],
+            'message': f'Email sent successfully to {to}'
+        }
+    
+    def list_connected_users(self) -> List[dict]:
+        """List all connected Gmail accounts."""
+        users = list(self._collection.find(
+            {'user_email': {'$exists': True}},
+            {'user_email': 1, 'created_at': 1, '_id': 0}
+        ))
+        return users
