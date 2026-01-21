@@ -3,7 +3,7 @@ fastapi==0.121.2
 uvicorn[standard]==0.38.0
 starlette==0.49.3
 anyio==4.11.0
-pydantic==2.12.4
+pydantic[email]==2.12.4
 python-multipart==0.0.6
 python-dotenv==1.2.1
 
@@ -61,11 +61,11 @@ phonenumbers==9.0.18
 requests_oauthlib
 
 # Google Sheets Integration
-gspread==6.1.4
-google-auth==2.36.0
-google-auth-oauthlib==1.2.1
-google-auth-httplib2==0.2.0
+gspread>=6.1.0
+google-auth>=2.20.0
+google-auth-oauthlib>=1.2.0
+google-auth-httplib2>=0.2.0
 
 # Gmail API
-google-api-python-client
-cryptography
+google-api-python-client>=2.150.0
+cryptography>=42.0.0
