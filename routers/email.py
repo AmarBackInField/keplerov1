@@ -164,12 +164,15 @@ async def get_user_email(x_user_email: str = Header(...)) -> str:
 
 # API Endpoints
 @router.get("/authorize")
-async def authorize():
+async def authorize(redirect_url: Optional[str] = None):
     """
     Redirect user to Google's OAuth page for Gmail authorization.
     
     After authorization, user will be redirected back with their credentials stored.
     Use the returned email in X-User-Email header for subsequent API requests.
+    
+    - **redirect_url**: Optional URL to redirect user to after successful authorization.
+                        The user's email will be appended as a query parameter.
     """
     try:
         # Allow insecure transport for local development
@@ -187,14 +190,21 @@ async def authorize():
             prompt='consent'
         )
         
-        # Store state in MongoDB temporarily
+        # Store state and redirect_url in MongoDB temporarily
+        state_data = {
+            'state': state,
+            'timestamp': datetime.utcnow()
+        }
+        if redirect_url:
+            state_data['redirect_url'] = redirect_url
+            
         _collection.update_one(
             {'_id': 'oauth_state'},
-            {'$set': {'state': state, 'timestamp': datetime.utcnow()}},
+            {'$set': state_data},
             upsert=True
         )
         
-        log_info("Redirecting user to Google OAuth")
+        log_info(f"Redirecting user to Google OAuth (redirect_url: {redirect_url})")
         return RedirectResponse(url=authorization_url)
     
     except Exception as e:
@@ -208,6 +218,8 @@ async def oauth2callback(code: str, state: Optional[str] = None):
     Handle the callback from Google OAuth.
     
     This endpoint is called by Google after the user authorizes the application.
+    If a redirect_url was provided during authorization, the user will be redirected
+    to that URL with the email as a query parameter.
     """
     try:
         # Allow insecure transport for local development
@@ -215,9 +227,10 @@ async def oauth2callback(code: str, state: Optional[str] = None):
         # Relax token scope validation (allows Google to return additional granted scopes)
         os.environ['OAUTHLIB_RELAX_TOKEN_SCOPE'] = '1'
         
-        # Retrieve stored state from MongoDB
+        # Retrieve stored state and redirect_url from MongoDB
         state_doc = _collection.find_one({'_id': 'oauth_state'})
         stored_state = state_doc.get('state') if state_doc else None
+        redirect_url = state_doc.get('redirect_url') if state_doc else None
         
         # Create flow with or without state validation
         if stored_state and state and stored_state == state:
@@ -244,6 +257,14 @@ async def oauth2callback(code: str, state: Optional[str] = None):
         _collection.delete_one({'_id': 'oauth_state'})
         
         log_info(f"Gmail connected successfully for {user_email}")
+        
+        # If redirect_url was provided, redirect user to that URL with email as query param
+        if redirect_url:
+            # Add email as query parameter to the redirect URL
+            separator = '&' if '?' in redirect_url else '?'
+            final_redirect_url = f"{redirect_url}{separator}email={user_email}&success=true"
+            log_info(f"Redirecting user to: {final_redirect_url}")
+            return RedirectResponse(url=final_redirect_url)
         
         return {
             "success": True,
