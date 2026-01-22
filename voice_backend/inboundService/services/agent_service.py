@@ -171,16 +171,29 @@ class Assistant(Agent):
         super().__init__(instructions=instructions)
 
     async def before_llm_inference(self, ctx: RunContext):
-        """Optimized RAG search with timeout."""
+        """Optimized RAG search with timeout.
+        
+        Note: For Gemini compatibility, we inject context into the user message
+        rather than adding a separate system message, as Gemini has strict
+        turn-ordering requirements that don't allow system messages mid-conversation.
+        """
         chat_ctx = ctx.chat_context
         if not chat_ctx or not chat_ctx.messages or not self.rag_service:
             return
         
-        last_message = chat_ctx.messages[-1]
-        if last_message.role != "user":
+        # Find the last user message
+        last_user_msg_idx = None
+        for i in range(len(chat_ctx.messages) - 1, -1, -1):
+            if chat_ctx.messages[i].role == "user":
+                last_user_msg_idx = i
+                break
+        
+        if last_user_msg_idx is None:
             return
         
+        last_message = chat_ctx.messages[last_user_msg_idx]
         user_query = last_message.content
+        
         try:
             search_results = await asyncio.wait_for(
                 asyncio.to_thread(
@@ -195,7 +208,10 @@ class Assistant(Agent):
             if search_results:
                 context = search_results[0].get('text', '').strip()
                 if context:
-                    chat_ctx.append(role="system", text=f"Context: {context}")
+                    # Inject context into the user message instead of adding a system message
+                    # This maintains Gemini's required turn order
+                    enhanced_content = f"[Relevant Context: {context}]\n\nUser question: {user_query}"
+                    last_message.content = enhanced_content
                     logger.info(f"RAG Context injected: {context[:50]}...")
         except (asyncio.TimeoutError, Exception) as e:
             logger.error(f"RAG search error: {e}")
@@ -239,29 +255,58 @@ class Assistant(Agent):
             return "error"
 
     @function_tool
-    async def send_email_tool(self, ctx: RunContext, tool_name: str, to: str, subject: Optional[str] = None, body: Optional[str] = None, cc: Optional[str] = None) -> str:
-        """Send email via Gmail API in background."""
+    async def send_email_tool(
+        self, 
+        ctx: RunContext, 
+        tool_name: str,
+        caller_name: str,
+        caller_email: str,
+        caller_phone: str = ""
+    ) -> str:
+        """Send email via Gmail API. For inbound calls, you MUST collect the caller's information first.
+        
+        IMPORTANT: Before calling this tool, you must ask the caller for:
+        1. Their full name
+        2. Their email address
+        3. Their phone number (optional but recommended)
+        
+        Args:
+            tool_name: The name of the email tool to use (e.g., 'confirm_appoinment')
+            caller_name: The caller's full name (REQUIRED - ask the caller)
+            caller_email: The caller's email address (REQUIRED - ask the caller)
+            caller_phone: The caller's phone number (optional - ask the caller)
+        """
         tools = await load_registered_tools_async()
         tool = next((t for tid, t in tools.items() if t.get("tool_name") == tool_name), None)
         if not tool or tool.get("tool_type") != "email": 
+            logger.error(f"Tool not found or not email type: {tool_name}")
             return "error: tool not found or not an email tool"
         
         props = tool.get("schema", {}).get("properties", {})
-        final_subject = subject or props.get("subject", {}).get("value", "")
-        final_body = body or props.get("body", {}).get("value", "")
-        final_cc = cc or props.get("cc", {}).get("value", "")
+        
+        # Get template values from tool config
+        subject_template = props.get("subject", {}).get("value", "")
+        body_template = props.get("body", {}).get("value", "")
+        cc = props.get("cc", {}).get("value", "")
+        
+        # Replace placeholders in subject and body with caller info
+        final_subject = subject_template.replace("{{name}}", caller_name).replace("{{email}}", caller_email).replace("{{phone}}", caller_phone)
+        final_body = body_template.replace("{{name}}", caller_name).replace("{{email}}", caller_email).replace("{{phone}}", caller_phone)
         
         # Get gmail_user_email from agent config
-        gmail_user = self.agent_config.get("gmail_user_email", GMAIL_USER_EMAIL)
+        gmail_user = self.agent_config.get("owner_email", GMAIL_USER_EMAIL)
         
         if not gmail_user:
+            logger.error("Gmail not configured - gmail_user_email missing from config")
             return "error: Gmail not configured. Set gmail_user_email in config or authorize at /email/authorize"
         
-        asyncio.create_task(send_gmail_email_async(to, final_subject, final_body, final_cc, gmail_user))
-        return "success: email queued"
+        # Send to the caller's email address
+        logger.info(f"Sending email to {caller_email} for {caller_name}")
+        asyncio.create_task(send_gmail_email_async(caller_email, final_subject, final_body, cc, gmail_user))
+        return f"success: email queued to {caller_email}"
 
     @function_tool
-    async def get_products(self, ctx: RunContext, limit: Optional[int] = 5) -> str:
+    async def get_products(self, ctx: RunContext, limit: int = 5) -> str:
         """
         Fetch products from the connected ecommerce store.
         Use this tool to get product information, pricing, and availability.
@@ -272,9 +317,7 @@ class Assistant(Agent):
         Returns:
             Formatted product information
         """
-        # Provide immediate feedback to the caller
-        if self._agent_session:
-            await self._agent_session.say("Let me check our products for you, just a moment.")
+        # NOTE: Do NOT call session.say() here - it breaks Gemini's turn ordering
         
         client = get_ecommerce_client()
         if not client:
@@ -292,7 +335,7 @@ class Assistant(Agent):
             return f"Error fetching products: {str(e)}"
 
     @function_tool
-    async def get_orders(self, ctx: RunContext, limit: Optional[int] = 5) -> str:
+    async def get_orders(self, ctx: RunContext, limit: int = 5) -> str:
         """
         Fetch recent orders from the connected ecommerce store.
         Use this tool to check order status, history, and details.
@@ -303,9 +346,7 @@ class Assistant(Agent):
         Returns:
             Formatted order information
         """
-        # Provide immediate feedback to the caller
-        if self._agent_session:
-            await self._agent_session.say("Let me look up the order information, one moment please.")
+        # NOTE: Do NOT call session.say() here - it breaks Gemini's turn ordering
         
         client = get_ecommerce_client()
         if not client:
@@ -401,7 +442,7 @@ async def entrypoint(ctx: agents.JobContext):
         base_url="https://api.eu.residency.elevenlabs.io/v1",
         api_key=os.getenv("ELEVEN_API_KEY"),
         model="eleven_flash_v2_5",  # Flash model = fastest (~150ms vs turbo ~250ms)
-        voice=voice_id,
+        voice_id=voice_id,
         language=language,
         streaming_latency=3,  # 0 = lowest latency (was 1)
     )
@@ -554,6 +595,34 @@ async def entrypoint(ctx: agents.JobContext):
     full_instructions = agent_instruction
     if escalation_condition:
         full_instructions += f"\n\nEscalation Condition: {escalation_condition}. When this condition is met, use the transfer_to_human tool to transfer the call."
+    
+    # Load registered tools and add their descriptions to instructions
+    registered_tools = await load_registered_tools_async()
+    if registered_tools:
+        tool_descriptions = []
+        for tool_id, tool_config in registered_tools.items():
+            tool_name = tool_config.get("tool_name", "unknown")
+            tool_type = tool_config.get("tool_type", "unknown")
+            tool_desc = tool_config.get("description", "No description")
+            props = tool_config.get("schema", {}).get("properties", {})
+            
+            # Build parameter info
+            param_info = []
+            for prop_name, prop_config in props.items():
+                default_val = prop_config.get("value", "")
+                if default_val:
+                    param_info.append(f"{prop_name}='{default_val[:30]}...' (default)" if len(str(default_val)) > 30 else f"{prop_name}='{default_val}' (default)")
+                else:
+                    param_info.append(f"{prop_name} (required)")
+            
+            tool_descriptions.append(f"- {tool_name} ({tool_type}): {tool_desc}")
+            if param_info:
+                tool_descriptions.append(f"  Parameters: {', '.join(param_info)}")
+        
+        if tool_descriptions:
+            full_instructions += "\n\n## Available Tools:\n" + "\n".join(tool_descriptions)
+            full_instructions += "\n\nIMPORTANT: For inbound calls, you MUST ask the caller for their name, email address, and phone number BEFORE using the send_email_tool. Use the collected information when calling the tool."
+            logger.info(f"Added {len(registered_tools)} tool descriptions to instructions")
     
     logger.info(f"Agent Instructions: {full_instructions[:200]}...")
     

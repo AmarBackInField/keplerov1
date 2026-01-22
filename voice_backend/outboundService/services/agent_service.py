@@ -202,17 +202,30 @@ class Assistant(Agent):
         super().__init__(instructions=instructions)
 
     async def before_llm_inference(self, ctx: RunContext):
-        """Optimized RAG search with lower timeout."""
+        """Optimized RAG search with lower timeout.
+        
+        Note: For Gemini compatibility, we inject context into the user message
+        rather than adding a separate system message, as Gemini has strict
+        turn-ordering requirements that don't allow system messages mid-conversation.
+        """
         logger.info(f"Before LLM inference: {ctx.chat_context}")
         chat_ctx = ctx.chat_context
         if not chat_ctx or not chat_ctx.messages or not self.rag_service:
             return
         
-        last_message = chat_ctx.messages[-1]
-        if last_message.role != "user":
+        # Find the last user message
+        last_user_msg_idx = None
+        for i in range(len(chat_ctx.messages) - 1, -1, -1):
+            if chat_ctx.messages[i].role == "user":
+                last_user_msg_idx = i
+                break
+        
+        if last_user_msg_idx is None:
             return
         
+        last_message = chat_ctx.messages[last_user_msg_idx]
         user_query = last_message.content
+        
         try:
             search_results = await asyncio.wait_for(
                 asyncio.to_thread(
@@ -227,8 +240,11 @@ class Assistant(Agent):
             if search_results:
                 context = search_results[0].get('text', '').strip()
                 if context:
-                    chat_ctx.append(role="system", text=f"Context: {context}")
-                    logger.info(f"Context: {context}")
+                    # Inject context into the user message instead of adding a system message
+                    # This maintains Gemini's required turn order
+                    enhanced_content = f"[Relevant Context: {context}]\n\nUser question: {user_query}"
+                    last_message.content = enhanced_content
+                    logger.info(f"Injected RAG context into user message: {context[:100]}...")
         except (asyncio.TimeoutError, Exception) as e:
             logger.error(f"Error in before LLM inference: {e}")
             pass
@@ -271,11 +287,26 @@ class Assistant(Agent):
             return "error"
 
     @function_tool
-    async def send_email_tool(self, ctx: RunContext, tool_name: str, to: Optional[str] = None, subject: Optional[str] = None, body: Optional[str] = None, cc: Optional[str] = None) -> str:
-        """Send email via Gmail API in background."""
+    async def send_email_tool(
+        self, 
+        ctx: RunContext, 
+        tool_name: str, 
+        to: str = "", 
+        subject: str = "", 
+        body: str = ""
+    ) -> str:
+        """Send email via Gmail API in background.
+        
+        Args:
+            tool_name: The name of the email tool to use (e.g., 'confirm_appoinment')
+            to: Recipient email address (optional, uses config default if not provided)
+            subject: Email subject line (optional, uses tool default if not provided)
+            body: Email body content (optional, uses tool default if not provided)
+        """
         tools = await load_registered_tools_async()
         tool = next((t for tid, t in tools.items() if t.get("tool_name") == tool_name), None)
         if not tool or tool.get("tool_type") != "email": 
+            logger.error(f"Tool not found or not email type: {tool_name}")
             return "error: tool not found or not an email tool"
         
         # Get config for owner_email and recipient email
@@ -286,7 +317,8 @@ class Assistant(Agent):
         final_to = to or config.get("email","")
         final_subject = subject or props.get("subject", {}).get("value", "")
         final_body = body or props.get("body", {}).get("value", "")
-        final_cc = cc or props.get("cc", {}).get("value", "")
+        # CC is always taken from tool config (not exposed as function param to avoid Pydantic issues)
+        final_cc = props.get("cc", {}).get("value", "")
         
         # Get owner_email (authorized Gmail) from config
         gmail_user = config.get("owner_email")
@@ -312,9 +344,8 @@ class Assistant(Agent):
         Returns:
             Formatted product information
         """
-        # Provide immediate feedback to the caller
-        if self._agent_session:
-            await self._agent_session.say("Let me check our products for you, just a moment.")
+        # NOTE: Do NOT call session.say() here - it breaks Gemini's turn ordering
+        # The LLM will naturally provide context in its response after receiving the function result
         
         client = get_ecommerce_client()
         if not client:
@@ -343,9 +374,8 @@ class Assistant(Agent):
         Returns:
             Formatted order information
         """
-        # Provide immediate feedback to the caller
-        if self._agent_session:
-            await self._agent_session.say("Let me look up the order information, one moment please.")
+        # NOTE: Do NOT call session.say() here - it breaks Gemini's turn ordering
+        # The LLM will naturally provide context in its response after receiving the function result
         
         client = get_ecommerce_client()
         if not client:
@@ -381,7 +411,7 @@ async def entrypoint(ctx: agents.JobContext):
     await tools_task
     
     # Extract config parameters from MongoDB
-    tts_language = dynamic_config.get("tts_language", "it")
+    tts_language = dynamic_config.get("tts_language", "en")
     voice_id = dynamic_config.get("voice_id", "21m00Tcm4TlvDq8ikWAM")  # Default: Rachel
     escalation_condition = dynamic_config.get("escalation_condition", "")
     collection_names = dynamic_config.get("collection_names", [])

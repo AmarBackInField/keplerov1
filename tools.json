@@ -2,7 +2,7 @@
     "4b85bada-408d-413a-a4f9-92568c51e0d0": {
         "tool_name": "confirm_appoinment",
         "tool_type": "email",
-        "description": "Send an email to recipients with optional CC",
+        "description": "Send an email to recipients, when user ask for meeting to schedule",
         "schema": {
             "type": "object",
             "properties": {
@@ -11,19 +11,14 @@
                     "description": "Recipient email address",
                     "value": "amar_c@me.iitr.ac.in"
                 },
-                "cc": {
-                    "type": "string",
-                    "description": "CC email address",
-                    "value": ""
-                },
                 "subject": {
                     "type": "string",
-                    "description": "Email subject",
+                    "description": "Email subject is by default use below",
                     "value": "IMPERASOLAR - conferma appuntamento"
                 },
                 "body": {
                     "type": "string",
-                    "description": "Email body content.",
+                    "description": "Email body content. use default and replace the name and email with the user's name and email",
                     "value": " You can write {{name}}, {{email}} to insert values that the AI gathered"
                 }
             },
