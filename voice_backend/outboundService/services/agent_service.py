@@ -201,53 +201,74 @@ class Assistant(Agent):
         self.rag_service = RAGService(openai_api_key=openai_api_key) if openai_api_key else None
         super().__init__(instructions=instructions)
 
-    async def before_llm_inference(self, ctx: RunContext):
-        """Optimized RAG search with lower timeout.
+    async def llm_node(
+        self,
+        chat_ctx,
+        tools,
+        model_settings,
+    ):
+        """Override llm_node to inject RAG context before LLM inference.
         
-        Note: For Gemini compatibility, we inject context into the user message
-        rather than adding a separate system message, as Gemini has strict
-        turn-ordering requirements that don't allow system messages mid-conversation.
+        This is the correct hook for LiveKit Agents v1.x (pipeline nodes architecture).
+        The before_llm_inference callback was removed in the v0.x to v1.x migration.
         """
-        logger.info(f"Before LLM inference: {ctx.chat_context}")
-        chat_ctx = ctx.chat_context
-        if not chat_ctx or not chat_ctx.messages or not self.rag_service:
-            return
+        # Inject RAG context as a system message
+        # In v1.x, ChatContext uses 'items' instead of 'messages'
+        items = chat_ctx.items if hasattr(chat_ctx, 'items') else []
         
-        # Find the last user message
-        last_user_msg_idx = None
-        for i in range(len(chat_ctx.messages) - 1, -1, -1):
-            if chat_ctx.messages[i].role == "user":
-                last_user_msg_idx = i
-                break
-        
-        if last_user_msg_idx is None:
-            return
-        
-        last_message = chat_ctx.messages[last_user_msg_idx]
-        user_query = last_message.content
-        
-        try:
-            search_results = await asyncio.wait_for(
-                asyncio.to_thread(
-                    self.rag_service.retrieval_based_search,
-                    query=user_query,
-                    collections=self.collection_names,
-                    top_k=1
-                ),
-                timeout=0.85
-            )
+        if items and self.rag_service and self.collection_names:
+            # Find the last user message to get the query
+            user_query = ""
+            for i in range(len(items) - 1, -1, -1):
+                item = items[i]
+                if hasattr(item, 'role') and item.role == "user":
+                    if hasattr(item, 'text_content'):
+                        user_query = item.text_content or ""
+                    elif hasattr(item, 'content'):
+                        content = item.content
+                        if isinstance(content, str):
+                            user_query = content
+                        elif isinstance(content, list) and content:
+                            user_query = str(content[0])
+                    break
             
-            if search_results:
-                context = search_results[0].get('text', '').strip()
-                if context:
-                    # Inject context into the user message instead of adding a system message
-                    # This maintains Gemini's required turn order
-                    enhanced_content = f"[Relevant Context: {context}]\n\nUser question: {user_query}"
-                    last_message.content = enhanced_content
-                    logger.info(f"Injected RAG context into user message: {context[:100]}...")
-        except (asyncio.TimeoutError, Exception) as e:
-            logger.error(f"Error in before LLM inference: {e}")
-            pass
+            # Only search if we have a query and haven't already added context
+            # Check if last system message already has RAG context
+            has_rag_context = False
+            for item in items:
+                if hasattr(item, 'role') and item.role == "system":
+                    text = getattr(item, 'text_content', '') or str(getattr(item, 'content', ''))
+                    if "[RAG Context]" in text:
+                        has_rag_context = True
+                        break
+            
+            if user_query and not has_rag_context:
+                try:
+                    search_results = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            self.rag_service.retrieval_based_search,
+                            query=user_query,
+                            collections=self.collection_names,
+                            top_k=1
+                        ),
+                        timeout=0.85
+                    )
+                    
+                    if search_results:
+                        context = search_results[0].get('text', '').strip()
+                        if context:
+                            # Add RAG context as a system message
+                            rag_message = f"[RAG Context] Use this relevant information to answer the user's question:\n{context}"
+                            chat_ctx.add_message(role="system", content=rag_message)
+                            logger.info(f"RAG context added: {context[:100]}...")
+                except asyncio.TimeoutError:
+                    logger.warning("RAG search timed out (>850ms)")
+                except Exception as e:
+                    logger.error(f"RAG search error: {e}")
+        
+        # Call the default llm_node implementation
+        async for event in Agent.default.llm_node(self, chat_ctx, tools, model_settings):
+            yield event
 
     @function_tool
     async def transfer_to_human(self, ctx: RunContext) -> str:
@@ -461,8 +482,8 @@ async def entrypoint(ctx: agents.JobContext):
     # 4. Initialize LLM (GPT-4o-mini - more reliable)
 
     # 4. Initialize LLM (GPT-4o-mini - more reliable)
-    # llm_instance = openai.LLM(model="gpt-4o-mini", temperature=0.3)
-    llm_instance = google.LLM(model="gemini-2.5-flash", temperature=0.3)
+    llm_instance = openai.LLM(model="gpt-4o-mini", temperature=0.3)
+    # llm_instance = google.LLM(model="gemini-2.5-flash", temperature=0.3)
     
     # 6. Configure Session with Aggressive VAD
     session = AgentSession(
