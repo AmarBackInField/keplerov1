@@ -247,8 +247,8 @@ async def chat(request: ChatRequest):
             top_k=request.top_k,
             thread_id=request.thread_id,
             system_prompt=enhanced_system_prompt,
-            provider=request.provider,
-            api_key=request.api_key,
+            provider="openai",
+            api_key=os.getenv("OPENAI_API_KEY"),
             skip_history=request.skip_history,  # Skip history for faster responses
             ecommerce_tools=ecommerce_tools if ecommerce_tools else None  # Pass ecommerce tools if available
         )

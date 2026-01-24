@@ -162,9 +162,13 @@ class EcommerceClient:
             name = p.get('name', 'Unknown')
             price = p.get('price', '0')
             stock_status = p.get('stock_status', 'unknown')
+            description = p.get('description', 'Unknown')
+            url = p.get('permalink', 'Unknown')
             result += f"\n- {name}\n"
             result += f"  Price: ${price}\n"
             result += f"  Stock: {stock_status}\n"
+            result += f"  Description: {description}\n"
+            result += f"  URL: {url}\n"
         
         return result
     
