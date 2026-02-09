@@ -15,6 +15,7 @@ from .model import (
     
     # Calls models
     EcommerceCredentials,
+    EmailToolCredentials,
     OutboundCallRequest,
     
     # LLM models
@@ -74,6 +75,7 @@ __all__ = [
     
     # Calls
     "EcommerceCredentials",
+    "EmailToolCredentials",
     "OutboundCallRequest",
     
     # LLM

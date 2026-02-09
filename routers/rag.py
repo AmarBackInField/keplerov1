@@ -7,6 +7,7 @@ import tempfile
 import shutil
 import asyncio
 import time
+import httpx
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from typing import Optional
 from utils.logger import log_info, log_error, log_exception
@@ -18,6 +19,7 @@ from model import (
     DeleteCollectionRequest,
     StatusResponse,
     EcommerceCredentials,
+    EmailToolCredentials,
 )
 
 router = APIRouter(prefix="/rag", tags=["RAG"])
@@ -152,6 +154,17 @@ async def chat(request: ChatRequest):
                 "api_secret": "cs_xxxxx"
             }
         }
+        
+        With email tool for appointment scheduling:
+        {
+            "query": "Schedule an appointment for John at john@example.com for tomorrow at 3pm",
+            "provider": "openai",
+            "system_prompt": "You are an appointment scheduling assistant. When a user wants to schedule an appointment, collect the necessary details (name, email, date, time) and send a confirmation email using the send_email tool. Format the email professionally with appointment details.",
+            "email_credentials": {
+                "x_user_email": "amarc8399@gmail.com",
+                "base_url": "https://keplerov1-python-2.onrender.com"
+            }
+        }
     """
     # Start timing
     start_time = time.time()
@@ -218,6 +231,62 @@ async def chat(request: ChatRequest):
             except Exception as e:
                 log_error(f"Failed to initialize ecommerce client: {e}")
         
+        # Initialize email tool if credentials are provided
+        email_tools = []
+        if request.email_credentials:
+            try:
+                email_base_url = request.email_credentials.base_url
+                x_user_email = request.email_credentials.x_user_email
+                
+                @tool
+                def send_email(to: str, subject: str, body: str) -> str:
+                    """Send an email to a recipient. Use this tool when the user wants to send an email, schedule an appointment confirmation, or communicate via email. 
+                    
+                    Args:
+                        to: The recipient's email address
+                        subject: The email subject line
+                        body: The email body content
+                    
+                    Returns:
+                        A confirmation message indicating success or failure
+                    """
+                    import httpx
+                    
+                    def run_sync():
+                        try:
+                            with httpx.Client(timeout=30.0) as client:
+                                response = client.post(
+                                    f"{email_base_url}/email/send",
+                                    headers={
+                                        "accept": "application/json",
+                                        "x-user-email": x_user_email,
+                                        "Content-Type": "application/json"
+                                    },
+                                    json={
+                                        "to": to,
+                                        "subject": subject,
+                                        "body": body
+                                    }
+                                )
+                                if response.status_code == 200:
+                                    return f"✓ Email sent successfully to {to}"
+                                else:
+                                    return f"✗ Failed to send email: {response.text}"
+                        except Exception as e:
+                            return f"✗ Error sending email: {str(e)}"
+                    
+                    return run_sync()
+                
+                email_tools = [send_email]
+                log_info(f"✓ Email tool created with @tool decorator")
+                log_info(f"  - send_email: {send_email.name}")
+                log_info(f"  - x_user_email: {x_user_email}")
+            except Exception as e:
+                log_error(f"Failed to initialize email tool: {e}")
+        
+        # Combine all tools
+        all_tools = ecommerce_tools + email_tools
+        
         # If no collections specified, search ALL documents (set to None for all-search)
         if not collections:
             collections = None
@@ -250,7 +319,7 @@ async def chat(request: ChatRequest):
             provider="openai",
             api_key=os.getenv("OPENAI_API_KEY"),
             skip_history=request.skip_history,  # Skip history for faster responses
-            ecommerce_tools=ecommerce_tools if ecommerce_tools else None  # Pass ecommerce tools if available
+            ecommerce_tools=all_tools if all_tools else None  # Pass all tools (ecommerce + email) if available
         )
         
         collection_count = len(collections) if collections else "all"

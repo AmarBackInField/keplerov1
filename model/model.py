@@ -28,6 +28,12 @@ class EcommerceCredentials(BaseModel):
     access_token: Optional[str] = None  # Access token (for platforms like Shopify)
 
 
+class EmailToolCredentials(BaseModel):
+    """Credentials for email tool integration in chat endpoint."""
+    x_user_email: str  # The authorized user email (x-user-email header)
+    base_url: str = "https://keplerov1-python-2.onrender.com"  # Email API base URL
+
+
 # ============================================================================
 # RAG MODELS
 # ============================================================================
@@ -45,6 +51,7 @@ class ChatRequest(BaseModel):
     elaborate: Optional[bool] = False  # Request detailed/elaborate responses (increases latency)
     skip_history: Optional[bool] = False  # Skip conversation history for faster responses
     ecommerce_credentials: Optional[EcommerceCredentials] = None  # Ecommerce platform credentials for product/order tools
+    email_credentials: Optional[EmailToolCredentials] = None  # Email tool credentials for sending emails
     
     def get_collections(self) -> list[str]:
         """Get list of collections, supporting both single and multiple collection names."""

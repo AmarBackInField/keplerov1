@@ -200,6 +200,13 @@ class RAGWorkflow:
             elif state.get("collection_name"):
                 collections = [state["collection_name"]]
             
+            # SKIP RAG retrieval if no collections specified AND tools are available (tool-only mode)
+            if not collections and self._ecommerce_tools:
+                log_info("⏭️ RETRIEVE: Skipped (no collections specified, tool-only mode)")
+                state["retrieved_docs"] = []
+                state["context"] = ""
+                return state
+            
             # If collections is empty list or None, search ALL documents
             if collections:
                 log_debug(f"Retrieving documents from collections: {collections} for query: '{state['query']}'")
@@ -301,7 +308,13 @@ class RAGWorkflow:
             # Use custom system prompt if provided, otherwise use default
             system_prompt_content = state.get("system_prompt") or SYSTEM_PROMPT
             if ecommerce_tools:
-                system_prompt_content += """
+                # Check which tools are available
+                tool_names = [t.name for t in ecommerce_tools]
+                has_ecommerce = "get_products" in tool_names or "get_orders" in tool_names
+                has_email = "send_email" in tool_names
+                
+                if has_ecommerce:
+                    system_prompt_content += """
 
 IMPORTANT: You have access to ecommerce tools that connect to a real store. You MUST use these tools when users ask about:
 - Products, items, catalog, inventory, stock, or what's available
@@ -310,9 +323,23 @@ IMPORTANT: You have access to ecommerce tools that connect to a real store. You 
 
 When a user asks about products or orders, ALWAYS call the appropriate tool first before responding. The tools will give you real, up-to-date information from the store.
 
-Available tools:
+Available ecommerce tools:
 - get_products: Use this to fetch current products from the store
 - get_orders: Use this to fetch recent orders from the store"""
+                
+                if has_email:
+                    system_prompt_content += """
+
+IMPORTANT: You have access to an email tool. You MUST use this tool when:
+- The user wants to send an email
+- The user wants to schedule or confirm an appointment (send confirmation email)
+- The user asks you to communicate something via email
+- The user provides recipient email, subject, and body content
+
+When sending emails, ALWAYS use the send_email tool with the recipient's email address, subject line, and body content.
+
+Available email tool:
+- send_email: Use this to send an email. Requires: to (recipient email), subject (email subject), body (email content)"""
             messages = [SystemMessage(content=system_prompt_content)]
             
             if has_retrieval_context:
